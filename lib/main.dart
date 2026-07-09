@@ -33,6 +33,8 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   bool _accessibilityGranted = false;
   bool _blockingEnabled = false;
+  TimeOfDay _startTime = const TimeOfDay(hour: 8, minute: 0);
+  TimeOfDay _endTime = const TimeOfDay(hour: 17, minute: 0);
 
   @override
   void initState() {
@@ -46,6 +48,14 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _accessibilityGranted = granted;
       _blockingEnabled = prefs.getBool('blocking_enabled') ?? false;
+      _startTime = TimeOfDay(
+        hour: prefs.getInt('study_start_hour') ?? 8,
+        minute: prefs.getInt('study_start_minute') ?? 0,
+      );
+      _endTime = TimeOfDay(
+        hour: prefs.getInt('study_end_hour') ?? 17,
+        minute: prefs.getInt('study_end_minute') ?? 0,
+      );
     });
   }
 
@@ -53,6 +63,38 @@ class _HomeScreenState extends State<HomeScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('blocking_enabled', value);
     setState(() => _blockingEnabled = value);
+  }
+
+  Future<void> _pickStartTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _startTime,
+    );
+    if (picked != null) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('study_start_hour', picked.hour);
+      await prefs.setInt('study_start_minute', picked.minute);
+      setState(() => _startTime = picked);
+    }
+  }
+
+  Future<void> _pickEndTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _endTime,
+    );
+    if (picked != null) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('study_end_hour', picked.hour);
+      await prefs.setInt('study_end_minute', picked.minute);
+      setState(() => _endTime = picked);
+    }
+  }
+
+  String _formatTime(TimeOfDay t) {
+    final h = t.hour.toString().padLeft(2, '0');
+    final m = t.minute.toString().padLeft(2, '0');
+    return '${h}h$m';
   }
 
   @override
@@ -73,14 +115,46 @@ class _HomeScreenState extends State<HomeScreen> {
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               "Les réseaux sociaux sélectionnés seront bloqués automatiquement "
-              "pendant le créneau d'étude configuré (par défaut 08h00 - 17h00).",
-              style: TextStyle(color: Colors.black54),
+              "entre ${_formatTime(_startTime)} et ${_formatTime(_endTime)}.",
+              style: const TextStyle(color: Colors.black54),
             ),
             const SizedBox(height: 24),
             if (!_accessibilityGranted) _buildPermissionCard(),
-            if (_accessibilityGranted) _buildBlockingSwitch(),
+            if (_accessibilityGranted) ...[
+              _buildBlockingSwitch(),
+              const SizedBox(height: 24),
+              const Text(
+                "Créneau d'étude",
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.play_arrow),
+                  title: const Text("Heure de début"),
+                  trailing: Text(
+                    _formatTime(_startTime),
+                    style: const TextStyle(
+                        fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  onTap: _pickStartTime,
+                ),
+              ),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.stop),
+                  title: const Text("Heure de fin"),
+                  trailing: Text(
+                    _formatTime(_endTime),
+                    style: const TextStyle(
+                        fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  onTap: _pickEndTime,
+                ),
+              ),
+            ],
           ],
         ),
       ),
