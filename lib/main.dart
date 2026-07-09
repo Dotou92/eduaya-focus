@@ -12,7 +12,7 @@ class EduAyoFocusApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'EduAyo Focus',
+      title: 'EduAya Focus',
       theme: ThemeData(
         primarySwatch: Colors.indigo,
         useMaterial3: true,
@@ -59,7 +59,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('EduAyo Focus'),
+        title: const Text('EduAya Focus'),
         backgroundColor: Theme.of(context).primaryColor,
         foregroundColor: Colors.white,
       ),
@@ -101,7 +101,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 8),
             const Text(
-              "Pour bloquer les applications, EduAyo Focus a besoin de la "
+              "Pour bloquer les applications, EduAya Focus a besoin de la "
               "permission d'accessibilité. Vous devez l'activer manuellement.",
             ),
             const SizedBox(height: 12),
