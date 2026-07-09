@@ -8,26 +8,22 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.Toast
 import java.util.Calendar
 
-/**
- * Service d'accessibilité qui surveille l'application au premier plan.
- * Si l'application appartient à la liste des apps bloquées ET que
- * l'heure actuelle est dans le créneau d'étude configuré, l'utilisateur
- * est automatiquement renvoyé à l'écran d'accueil.
- *
- * Configuration lue depuis les SharedPreferences partagées avec Flutter
- * (fichier "FlutterSharedPreferences", clés préfixées "flutter.").
- */
 class BlockerAccessibilityService : AccessibilityService() {
 
-    // Liste par défaut (Phase 1 - preuve de concept). Sera remplacée
-    // en Phase 2 par une liste configurable depuis l'app Flutter.
     private val defaultBlockedPackages = setOf(
-        "com.facebook.katana",       // Facebook
-        "com.instagram.android",     // Instagram
-        "com.zhiliaoapp.musically",  // TikTok
-        "com.twitter.android",       // Twitter / X
-        "com.snapchat.android",      // Snapchat
-        "com.google.android.youtube" // YouTube (optionnel)
+        "com.facebook.katana",        // Facebook
+        "com.facebook.lite",          // Facebook Lite
+        "com.facebook.orca",          // Messenger
+        "com.facebook.mlite",         // Messenger Lite
+        "com.instagram.android",      // Instagram
+        "com.instagram.lite",         // Instagram Lite
+        "com.zhiliaoapp.musically",   // TikTok
+        "com.zhiliaoapp.musically.go",// TikTok Lite
+        "com.ss.android.ugc.trill",   // TikTok (variante internationale)
+        "com.twitter.android",        // Twitter / X
+        "com.snapchat.android",       // Snapchat
+        "com.google.android.youtube", // YouTube
+        "com.google.android.apps.youtube.music" // YouTube Music (optionnel)
     )
 
     private var lastBlockedPackage: String? = null
@@ -53,10 +49,6 @@ class BlockerAccessibilityService : AccessibilityService() {
         }
     }
 
-    /**
-     * Vérifie si l'heure actuelle se situe dans le créneau d'étude.
-     * Valeurs par défaut : 08h00 - 17h00 si non configurées.
-     */
     private fun isWithinStudySchedule(prefs: SharedPreferences): Boolean {
         val startHour = prefs.getInt("flutter.study_start_hour", 8)
         val startMinute = prefs.getInt("flutter.study_start_minute", 0)
@@ -71,16 +63,10 @@ class BlockerAccessibilityService : AccessibilityService() {
         return if (startMinutes <= endMinutes) {
             nowMinutes in startMinutes..endMinutes
         } else {
-            // Créneau qui traverse minuit (ex: 20h - 02h)
             nowMinutes >= startMinutes || nowMinutes <= endMinutes
         }
     }
 
-    /**
-     * Lit la liste des apps à bloquer depuis les préférences.
-     * Format attendu : chaîne séparée par des virgules.
-     * Retombe sur la liste par défaut si rien n'est configuré.
-     */
     private fun getBlockedApps(prefs: SharedPreferences): Set<String> {
         val stored = prefs.getString("flutter.blocked_apps", null)
         return if (stored.isNullOrEmpty()) {
@@ -90,11 +76,6 @@ class BlockerAccessibilityService : AccessibilityService() {
         }
     }
 
-    /**
-     * Renvoie l'utilisateur à l'écran d'accueil et affiche un message.
-     * Anti-spam : évite de redéclencher en boucle sur le même package
-     * dans un intervalle de moins de 2 secondes.
-     */
     private fun blockApp(packageName: String) {
         val now = System.currentTimeMillis()
         if (packageName == lastBlockedPackage && now - lastBlockTime < 2000) return
@@ -106,20 +87,18 @@ class BlockerAccessibilityService : AccessibilityService() {
 
         Toast.makeText(
             applicationContext,
-            "EduAyo Focus : application bloquée pendant les heures d'étude 📚",
+            "EduAya Focus : application bloquée pendant les heures d'étude 📚",
             Toast.LENGTH_SHORT
         ).show()
     }
 
-    override fun onInterrupt() {
-        // Requis par AccessibilityService, rien à faire ici.
-    }
+    override fun onInterrupt() {}
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         Toast.makeText(
             applicationContext,
-            "EduAyo Focus est actif",
+            "EduAya Focus est actif",
             Toast.LENGTH_SHORT
         ).show()
     }
