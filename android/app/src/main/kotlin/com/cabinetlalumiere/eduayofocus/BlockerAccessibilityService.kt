@@ -20,13 +20,11 @@ class BlockerAccessibilityService : AccessibilityService() {
 
         val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
 
-        val sessionActive = prefs.getBoolean("flutter.session_active", false)
+        val sessionActive = prefs.getBoolean("native_session_active", false)
         if (!sessionActive) return
 
         val blockedApps = getBlockedApps(prefs)
         if (packageName in blockedApps) {
-            // Le blocage s'exécute SYSTÉMATIQUEMENT, sans exception,
-            // à chaque tentative d'ouverture détectée.
             performGlobalAction(GLOBAL_ACTION_HOME)
             showToastIfNeeded(packageName)
         }
@@ -41,11 +39,6 @@ class BlockerAccessibilityService : AccessibilityService() {
         }
     }
 
-    /**
-     * Le message visuel est limité à un affichage toutes les 2 secondes
-     * par app pour éviter le spam, mais ceci n'affecte JAMAIS le blocage
-     * lui-même, qui s'exécute toujours.
-     */
     private fun showToastIfNeeded(packageName: String) {
         val now = System.currentTimeMillis()
         if (packageName == lastToastPackage && now - lastToastTime < 2000) return
