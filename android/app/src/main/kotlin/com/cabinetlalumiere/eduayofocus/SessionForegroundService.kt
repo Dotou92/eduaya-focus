@@ -10,44 +10,76 @@ import android.content.Intent
 import android.os.Build
 import android.os.CountDownTimer
 import android.os.IBinder
+import java.text.SimpleDateFormat
+import java.util.*
 
 /**
- * Service de premier plan qui garde EduAya Focus "vivant" pendant une
- * session de concentration active, via une notification persistante.
- * C'est cette notification qui empêche Android (notamment Honor/Magic UI)
- * de tuer le service d'accessibilité pendant la session.
+ * Service de premier plan : garde une notification persistante visible
+ * avec les VRAIES heures de début/fin (pas un simple compte à rebours),
+ * et enregistre un "heartbeat" régulier permettant de détecter une
+ * interruption (app gelée/tuée) une fois la session reprise.
  */
 class SessionForegroundService : Service() {
 
     private var countDownTimer: CountDownTimer? = null
     private val CHANNEL_ID = "eduaya_focus_session_channel"
     private val NOTIFICATION_ID = 1001
+    private val PREFS_NAME = "FlutterSharedPreferences"
+    private val timeFormat = SimpleDateFormat("HH:mm", Locale.FRANCE)
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val minutes = intent?.getIntExtra("minutes", 30) ?: 30
-        val totalMillis = minutes * 60 * 1000L
+        val endHour = intent?.getIntExtra("endHour", 17) ?: 17
+        val endMinute = intent?.getIntExtra("endMinute", 0) ?: 0
 
-        createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification(formatTime(totalMillis)))
+        val now = Calendar.getInstance()
+        val startMillis = now.timeInMillis
 
-        // Marque la session comme active dans les préférences partagées
-        val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        val endCal = Calendar.getInstance()
+        endCal.set(Calendar.HOUR_OF_DAY, endHour)
+        endCal.set(Calendar.MINUTE, endMinute)
+        endCal.set(Calendar.SECOND, 0)
+        endCal.set(Calendar.MILLISECOND, 0)
+        if (endCal.timeInMillis <= startMillis) {
+            endCal.add(Calendar.DAY_OF_MONTH, 1)
+        }
+        val endMillis = endCal.timeInMillis
+        val totalMillis = endMillis - startMillis
+
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit()
-            .putBoolean("flutter.session_active", true)
-            .putLong("flutter.session_end_time", System.currentTimeMillis() + totalMillis)
+            .putBoolean("native_session_active", true)
+            .putLong("native_session_start_time", startMillis)
+            .putLong("native_session_end_time", endMillis)
+            .putLong("native_last_heartbeat", startMillis)
             .apply()
 
+        createNotificationChannel()
+        startForeground(
+            NOTIFICATION_ID,
+            buildNotification(startMillis, endMillis, totalMillis)
+        )
+
         countDownTimer?.cancel()
-        countDownTimer = object : CountDownTimer(totalMillis, 1000) {
+        countDownTimer = object : CountDownTimer(totalMillis, 15000) {
             override fun onTick(millisUntilFinished: Long) {
-                val notification = buildNotification(formatTime(millisUntilFinished))
+                val heartbeatPrefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                heartbeatPrefs.edit()
+                    .putLong("native_last_heartbeat", System.currentTimeMillis())
+                    .apply()
+
                 val manager = getSystemService(NotificationManager::class.java)
-                manager.notify(NOTIFICATION_ID, notification)
+                manager.notify(
+                    NOTIFICATION_ID,
+                    buildNotification(startMillis, endMillis, millisUntilFinished)
+                )
             }
 
             override fun onFinish() {
-                val prefs2 = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-                prefs2.edit().putBoolean("flutter.session_active", false).apply()
+                val finishPrefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                finishPrefs.edit()
+                    .putBoolean("native_session_active", false)
+                    .putLong("native_last_heartbeat", System.currentTimeMillis())
+                    .apply()
                 stopSelf()
             }
         }.start()
@@ -55,23 +87,24 @@ class SessionForegroundService : Service() {
         return START_STICKY
     }
 
-    private fun formatTime(millis: Long): String {
-        val totalSeconds = millis / 1000
-        val minutes = totalSeconds / 60
-        val seconds = totalSeconds % 60
-        return String.format("%02d:%02d", minutes, seconds)
-    }
-
-    private fun buildNotification(timeText: String): Notification {
+    private fun buildNotification(
+        startMillis: Long,
+        endMillis: Long,
+        millisRemaining: Long
+    ): Notification {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
         val pendingIntent = PendingIntent.getActivity(
             this, 0, launchIntent,
             PendingIntent.FLAG_IMMUTABLE
         )
 
+        val startText = timeFormat.format(Date(startMillis))
+        val endText = timeFormat.format(Date(endMillis))
+        val minutesLeft = (millisRemaining / 60000).toInt()
+
         return Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("EduAya Focus - Session en cours")
-            .setContentText("Temps restant : $timeText")
+            .setContentTitle("EduAya Focus : session $startText - $endText")
+            .setContentText("Temps restant : environ $minutesLeft min")
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -85,7 +118,7 @@ class SessionForegroundService : Service() {
                 "Session de concentration",
                 NotificationManager.IMPORTANCE_LOW
             )
-            channel.description = "Affiche le temps restant pendant une session de concentration"
+            channel.description = "Affiche les heures de la session en cours"
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
@@ -94,8 +127,6 @@ class SessionForegroundService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         countDownTimer?.cancel()
-        val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-        prefs.edit().putBoolean("flutter.session_active", false).apply()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
