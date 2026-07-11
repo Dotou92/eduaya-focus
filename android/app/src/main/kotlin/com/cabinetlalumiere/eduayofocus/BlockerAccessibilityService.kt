@@ -6,16 +6,10 @@ import android.content.SharedPreferences
 import android.view.accessibility.AccessibilityEvent
 import android.widget.Toast
 
-/**
- * Service d'accessibilité qui surveille l'application au premier plan.
- * Bloque uniquement pendant une SESSION ACTIVE (démarrée manuellement
- * par l'élève depuis l'app), et uniquement les applications qu'il a
- * lui-même sélectionnées pour cette session.
- */
 class BlockerAccessibilityService : AccessibilityService() {
 
-    private var lastBlockedPackage: String? = null
-    private var lastBlockTime: Long = 0
+    private var lastToastPackage: String? = null
+    private var lastToastTime: Long = 0
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
@@ -31,7 +25,10 @@ class BlockerAccessibilityService : AccessibilityService() {
 
         val blockedApps = getBlockedApps(prefs)
         if (packageName in blockedApps) {
-            blockApp(packageName)
+            // Le blocage s'exécute SYSTÉMATIQUEMENT, sans exception,
+            // à chaque tentative d'ouverture détectée.
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            showToastIfNeeded(packageName)
         }
     }
 
@@ -44,14 +41,17 @@ class BlockerAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun blockApp(packageName: String) {
+    /**
+     * Le message visuel est limité à un affichage toutes les 2 secondes
+     * par app pour éviter le spam, mais ceci n'affecte JAMAIS le blocage
+     * lui-même, qui s'exécute toujours.
+     */
+    private fun showToastIfNeeded(packageName: String) {
         val now = System.currentTimeMillis()
-        if (packageName == lastBlockedPackage && now - lastBlockTime < 2000) return
+        if (packageName == lastToastPackage && now - lastToastTime < 2000) return
 
-        lastBlockedPackage = packageName
-        lastBlockTime = now
-
-        performGlobalAction(GLOBAL_ACTION_HOME)
+        lastToastPackage = packageName
+        lastToastTime = now
 
         Toast.makeText(
             applicationContext,
