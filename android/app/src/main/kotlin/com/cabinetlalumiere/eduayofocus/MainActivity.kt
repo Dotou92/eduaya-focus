@@ -35,9 +35,11 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "startSession" -> {
-                        val minutes = call.argument<Int>("minutes") ?: 30
+                        val endHour = call.argument<Int>("endHour") ?: 17
+                        val endMinute = call.argument<Int>("endMinute") ?: 0
                         val intent = Intent(this, SessionForegroundService::class.java)
-                        intent.putExtra("minutes", minutes)
+                        intent.putExtra("endHour", endHour)
+                        intent.putExtra("endMinute", endMinute)
                         startForegroundService(intent)
                         result.success(null)
                     }
@@ -45,7 +47,6 @@ class MainActivity : FlutterActivity() {
                         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                         prefs.edit()
                             .putBoolean("native_session_active", false)
-                            .putBoolean("flutter.session_active", false)
                             .apply()
                         val intent = Intent(this, SessionForegroundService::class.java)
                         stopService(intent)
