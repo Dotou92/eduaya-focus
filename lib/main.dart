@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/config_service.dart';
@@ -14,37 +15,107 @@ class EduAyoFocusApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'EduAya Focus',
-      theme: ThemeData(
-        primarySwatch: Colors.indigo,
-        useMaterial3: true,
-      ),
+      theme: ThemeData(primarySwatch: Colors.indigo, useMaterial3: true),
       home: const HomeScreen(),
       debugShowCheckedModeBanner: false,
     );
   }
 }
 
-// ------------------- ECRAN D'ACCUEIL -------------------
+String fmtTime(DateTime t) =>
+    "${t.hour.toString().padLeft(2, '0')}h${t.minute.toString().padLeft(2, '0')}";
+
+// ------------------- ACCUEIL -------------------
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
   bool _accessibilityGranted = false;
+  List<Map<String, dynamic>> _history = [];
 
   @override
   void initState() {
     super.initState();
-    _loadState();
+    _init();
   }
 
-  Future<void> _loadState() async {
+  Future<void> _init() async {
     final granted = await ConfigService.isAccessibilityServiceEnabled();
     setState(() => _accessibilityGranted = granted);
+    await _checkForInterruptedSession();
+    await _loadHistory();
+  }
+
+  /// Détecte si une session était en cours mais que le service natif
+  /// a été tué (app gelée/forcée à s'arrêter), puis relance le blocage
+  /// et note l'interruption dans l'historique.
+  Future<void> _checkForInterruptedSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final inProgress = prefs.getBool('session_in_progress') ?? false;
+    if (!inProgress) return;
+
+    final status = await ConfigService.getSessionStatus();
+    final active = status['active'] == true;
+    final endTime = (status['endTime'] ?? 0) as int;
+    final lastHeartbeat = (status['lastHeartbeat'] ?? 0) as int;
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    if (endTime > now && !active) {
+      // Interruption détectée : le service ne tourne plus alors que
+      // la session n'était pas terminée.
+      await _appendInterruption(lastHeartbeat);
+
+      final endDt = DateTime.fromMillisecondsSinceEpoch(endTime);
+      await ConfigService.startSession(endDt.hour, endDt.minute);
+
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => SessionScreen(endTime: endDt)),
+      );
+    } else if (endTime <= now) {
+      await _finalizeSession(completed: true);
+    }
+  }
+
+  Future<void> _appendInterruption(int lastHeartbeatMillis) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('current_session_record');
+    if (raw == null) return;
+    final record = Map<String, dynamic>.from(jsonDecode(raw));
+    final interruptions = List<int>.from(record['interruptions'] ?? []);
+    interruptions.add(lastHeartbeatMillis);
+    record['interruptions'] = interruptions;
+    await prefs.setString('current_session_record', jsonEncode(record));
+  }
+
+  Future<void> _finalizeSession({required bool completed}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('current_session_record');
+    if (raw != null) {
+      final record = Map<String, dynamic>.from(jsonDecode(raw));
+      record['completed'] = completed;
+      final historyRaw = prefs.getStringList('session_history') ?? [];
+      historyRaw.add(jsonEncode(record));
+      await prefs.setStringList('session_history', historyRaw);
+      await prefs.remove('current_session_record');
+    }
+    await prefs.setBool('session_in_progress', false);
+  }
+
+  Future<void> _loadHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList('session_history') ?? [];
+    final list = raw
+        .map((s) => Map<String, dynamic>.from(jsonDecode(s)))
+        .toList()
+        .reversed
+        .toList();
+    setState(() => _history = list);
   }
 
   @override
@@ -55,10 +126,10 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: Theme.of(context).primaryColor,
         foregroundColor: Colors.white,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+      body: RefreshIndicator(
+        onRefresh: _loadHistory,
+        child: ListView(
+          padding: const EdgeInsets.all(20),
           children: [
             const Text(
               "Concentration pendant vos sessions d'étude",
@@ -66,8 +137,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 8),
             const Text(
-              "Choisissez une durée, sélectionnez les applications à "
-              "bloquer, puis démarrez votre session.",
+              "Choisissez une heure de fin, sélectionnez les applications "
+              "à bloquer, puis démarrez votre session.",
               style: TextStyle(color: Colors.black54),
             ),
             const SizedBox(height: 24),
@@ -77,23 +148,81 @@ class _HomeScreenState extends State<HomeScreen> {
                 width: double.infinity,
                 child: ElevatedButton.icon(
                   icon: const Icon(Icons.play_circle_fill),
-                  label: const Text(
-                    "Nouvelle session de concentration",
-                    style: TextStyle(fontSize: 16),
-                  ),
+                  label: const Text("Nouvelle session de concentration",
+                      style: TextStyle(fontSize: 16)),
                   style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                  ),
+                      padding: const EdgeInsets.symmetric(vertical: 18)),
                   onPressed: () async {
                     await Navigator.push(
                       context,
-                      MaterialPageRoute(
-                        builder: (_) => const DurationScreen(),
-                      ),
+                      MaterialPageRoute(builder: (_) => const EndTimeScreen()),
                     );
+                    _loadHistory();
                   },
                 ),
               ),
+            const SizedBox(height: 32),
+            const Text("Historique des sessions",
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            if (_history.isEmpty)
+              const Text("Aucune session enregistrée pour l'instant.",
+                  style: TextStyle(color: Colors.black54)),
+            ..._history.map(_buildHistoryTile),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHistoryTile(Map<String, dynamic> record) {
+    final start = DateTime.fromMillisecondsSinceEpoch(record['start']);
+    final end = DateTime.fromMillisecondsSinceEpoch(record['end']);
+    final completed = record['completed'] == true;
+    final interruptions = List<int>.from(record['interruptions'] ?? []);
+    final apps = List<String>.from(record['appNames'] ?? []);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  interruptions.isEmpty
+                      ? (completed ? Icons.check_circle : Icons.access_time)
+                      : Icons.warning_amber_rounded,
+                  color: interruptions.isEmpty
+                      ? (completed ? Colors.green : Colors.orange)
+                      : Colors.red,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  "Session ${fmtTime(start)} - ${fmtTime(end)}",
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            if (interruptions.isEmpty)
+              Text(completed ? "Terminée sans interruption" : "En cours",
+                  style: const TextStyle(color: Colors.black54))
+            else
+              ...interruptions.map((millis) {
+                final t = DateTime.fromMillisecondsSinceEpoch(millis);
+                return Text(
+                  "⚠️ Interruption détectée vers ${fmtTime(t)}",
+                  style: const TextStyle(color: Colors.red),
+                );
+              }),
+            const SizedBox(height: 6),
+            Text(
+              "Applications bloquées : ${apps.isEmpty ? 'aucune' : apps.join(', ')}",
+              style: const TextStyle(fontSize: 12, color: Colors.black45),
+            ),
           ],
         ),
       ),
@@ -108,10 +237,8 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              "Permission requise",
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
+            const Text("Permission requise",
+                style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             const Text(
               "Pour bloquer les applications, EduAya Focus a besoin de la "
@@ -122,7 +249,9 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: () async {
                 await ConfigService.openAccessibilitySettings();
                 await Future.delayed(const Duration(seconds: 1));
-                _loadState();
+                final granted =
+                    await ConfigService.isAccessibilityServiceEnabled();
+                setState(() => _accessibilityGranted = granted);
               },
               child: const Text("Ouvrir les réglages"),
             ),
@@ -133,52 +262,52 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// ------------------- ECRAN CHOIX DE LA DUREE -------------------
+// ------------------- CHOIX DE L'HEURE DE FIN -------------------
 
-class DurationScreen extends StatelessWidget {
-  const DurationScreen({super.key});
+class EndTimeScreen extends StatelessWidget {
+  const EndTimeScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final options = [30, 60, 90, 120];
     return Scaffold(
-      appBar: AppBar(title: const Text("Durée de la session")),
+      appBar: AppBar(title: const Text("Heure de fin de session")),
       body: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              "Combien de temps souhaitez-vous étudier ?",
+              "Jusqu'à quelle heure voulez-vous étudier ?",
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
-            const SizedBox(height: 20),
-            ...options.map((minutes) => Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton(
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                      ),
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                AppSelectionScreen(minutes: minutes),
-                          ),
-                        );
-                      },
-                      child: Text(
-                        minutes < 60
-                            ? "$minutes minutes"
-                            : "${minutes ~/ 60}h${minutes % 60 == 0 ? '' : minutes % 60}",
-                        style: const TextStyle(fontSize: 16),
-                      ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.access_time),
+                label: const Text("Choisir l'heure de fin"),
+                style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 18)),
+                onPressed: () async {
+                  final now = TimeOfDay.now();
+                  final picked = await showTimePicker(
+                    context: context,
+                    initialTime: TimeOfDay(
+                      hour: (now.hour + 1) % 24,
+                      minute: now.minute,
                     ),
-                  ),
-                )),
+                  );
+                  if (picked != null && context.mounted) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => AppSelectionScreen(endTime: picked),
+                      ),
+                    );
+                  }
+                },
+              ),
+            ),
           ],
         ),
       ),
@@ -186,11 +315,11 @@ class DurationScreen extends StatelessWidget {
   }
 }
 
-// ------------------- ECRAN SELECTION DES APPS -------------------
+// ------------------- SELECTION DES APPS -------------------
 
 class AppSelectionScreen extends StatefulWidget {
-  final int minutes;
-  const AppSelectionScreen({super.key, required this.minutes});
+  final TimeOfDay endTime;
+  const AppSelectionScreen({super.key, required this.endTime});
 
   @override
   State<AppSelectionScreen> createState() => _AppSelectionScreenState();
@@ -202,13 +331,7 @@ class _AppSelectionScreenState extends State<AppSelectionScreen> {
   bool _loading = true;
 
   static const List<String> _knownSocialKeywords = [
-    'facebook',
-    'instagram',
-    'tiktok',
-    'musically',
-    'twitter',
-    'snapchat',
-    'youtube',
+    'facebook', 'instagram', 'tiktok', 'musically', 'twitter', 'snapchat', 'youtube'
   ];
 
   @override
@@ -234,22 +357,49 @@ class _AppSelectionScreenState extends State<AppSelectionScreen> {
     });
   }
 
+  DateTime _resolveEndDateTime() {
+    final now = DateTime.now();
+    var end = DateTime(now.year, now.month, now.day, widget.endTime.hour, widget.endTime.minute);
+    if (!end.isAfter(now)) {
+      end = end.add(const Duration(days: 1));
+    }
+    return end;
+  }
+
   Future<void> _startSession() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('blocked_apps', _selected.join(','));
-    await ConfigService.startSession(widget.minutes);
+
+    final selectedNames = _apps
+        .where((a) => _selected.contains(a['packageName']))
+        .map((a) => a['name'] ?? '')
+        .toList();
+
+    final start = DateTime.now();
+    final end = _resolveEndDateTime();
+
+    final record = {
+      'start': start.millisecondsSinceEpoch,
+      'end': end.millisecondsSinceEpoch,
+      'appNames': selectedNames,
+      'interruptions': <int>[],
+      'completed': false,
+    };
+    await prefs.setString('current_session_record', jsonEncode(record));
+    await prefs.setBool('session_in_progress', true);
+
+    await ConfigService.startSession(widget.endTime.hour, widget.endTime.minute);
 
     if (!mounted) return;
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(
-        builder: (_) => SessionScreen(minutes: widget.minutes),
-      ),
+      MaterialPageRoute(builder: (_) => SessionScreen(endTime: end)),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final end = _resolveEndDateTime();
     return Scaffold(
       appBar: AppBar(title: const Text("Applications à bloquer")),
       body: _loading
@@ -259,8 +409,8 @@ class _AppSelectionScreenState extends State<AppSelectionScreen> {
                 Padding(
                   padding: const EdgeInsets.all(16),
                   child: Text(
-                    "${_selected.length} application(s) sélectionnée(s) "
-                    "pour cette session de ${widget.minutes} min",
+                    "${_selected.length} application(s) sélectionnée(s) — "
+                    "session jusqu'à ${fmtTime(end)}",
                     style: const TextStyle(color: Colors.black54),
                   ),
                 ),
@@ -292,13 +442,10 @@ class _AppSelectionScreenState extends State<AppSelectionScreen> {
                     width: double.infinity,
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                      ),
+                          padding: const EdgeInsets.symmetric(vertical: 16)),
                       onPressed: _selected.isEmpty ? null : _startSession,
-                      child: const Text(
-                        "Valider et démarrer",
-                        style: TextStyle(fontSize: 16),
-                      ),
+                      child: const Text("Valider et démarrer",
+                          style: TextStyle(fontSize: 16)),
                     ),
                   ),
                 ),
@@ -311,46 +458,101 @@ class _AppSelectionScreenState extends State<AppSelectionScreen> {
 // ------------------- ECRAN SESSION VERROUILLEE -------------------
 
 class SessionScreen extends StatefulWidget {
-  final int minutes;
-  const SessionScreen({super.key, required this.minutes});
+  final DateTime endTime;
+  const SessionScreen({super.key, required this.endTime});
 
   @override
   State<SessionScreen> createState() => _SessionScreenState();
 }
 
-class _SessionScreenState extends State<SessionScreen> {
-  late int _secondsRemaining;
+class _SessionScreenState extends State<SessionScreen>
+    with WidgetsBindingObserver {
   Timer? _timer;
   bool _finished = false;
+  List<String> _blockedAppNames = [];
 
   @override
   void initState() {
     super.initState();
-    _secondsRemaining = widget.minutes * 60;
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_secondsRemaining <= 0) {
-        timer.cancel();
-        _onFinished();
-      } else {
-        setState(() => _secondsRemaining--);
+    WidgetsBinding.instance.addObserver(this);
+    _loadBlockedAppNames();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+  }
+
+  Future<void> _loadBlockedAppNames() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('current_session_record');
+    if (raw != null) {
+      final record = Map<String, dynamic>.from(jsonDecode(raw));
+      setState(() {
+        _blockedAppNames = List<String>.from(record['appNames'] ?? []);
+      });
+    }
+  }
+
+  void _tick() {
+    if (DateTime.now().isAfter(widget.endTime)) {
+      _timer?.cancel();
+      _onFinished();
+    } else {
+      setState(() {});
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkInterruptionOnResume();
+    }
+  }
+
+  Future<void> _checkInterruptionOnResume() async {
+    final status = await ConfigService.getSessionStatus();
+    final active = status['active'] == true;
+    if (!active && !_finished && DateTime.now().isBefore(widget.endTime)) {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('current_session_record');
+      if (raw != null) {
+        final record = Map<String, dynamic>.from(jsonDecode(raw));
+        final interruptions = List<int>.from(record['interruptions'] ?? []);
+        interruptions.add(DateTime.now().millisecondsSinceEpoch);
+        record['interruptions'] = interruptions;
+        await prefs.setString('current_session_record', jsonEncode(record));
       }
-    });
+      await ConfigService.startSession(
+          TimeOfDay.fromDateTime(widget.endTime).hour,
+          TimeOfDay.fromDateTime(widget.endTime).minute);
+    }
   }
 
   Future<void> _onFinished() async {
     setState(() => _finished = true);
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('current_session_record');
+    if (raw != null) {
+      final record = Map<String, dynamic>.from(jsonDecode(raw));
+      record['completed'] = true;
+      final historyRaw = prefs.getStringList('session_history') ?? [];
+      historyRaw.add(jsonEncode(record));
+      await prefs.setStringList('session_history', historyRaw);
+      await prefs.remove('current_session_record');
+    }
+    await prefs.setBool('session_in_progress', false);
     await ConfigService.stopSession();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     super.dispose();
   }
 
-  String _formatTime(int seconds) {
-    final m = (seconds ~/ 60).toString().padLeft(2, '0');
-    final s = (seconds % 60).toString().padLeft(2, '0');
+  String get _remainingText {
+    final diff = widget.endTime.difference(DateTime.now());
+    if (diff.isNegative) return "00:00";
+    final m = diff.inMinutes.toString().padLeft(2, '0');
+    final s = (diff.inSeconds % 60).toString().padLeft(2, '0');
     return "$m:$s";
   }
 
@@ -366,44 +568,15 @@ class _SessionScreenState extends State<SessionScreen> {
             children: [
               if (!_finished) ...[
                 const Icon(Icons.school, color: Colors.white, size: 64),
-                const SizedBox(height: 24),
-                const Text(
-                  "Concentration en cours",
-                  style: TextStyle(color: Colors.white70, fontSize: 18),
+                const SizedBox(height: 20),
+                Text(
+                  "Session en cours jusqu'à ${fmtTime(widget.endTime)}",
+                  style: const TextStyle(color: Colors.white70, fontSize: 18),
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  _formatTime(_secondsRemaining),
+                  _remainingText,
                   style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 64,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ] else ...[
-                const Icon(Icons.check_circle, color: Colors.white, size: 72),
-                const SizedBox(height: 24),
-                const Text(
-                  "Bravo, session terminée !",
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 24),
-                ElevatedButton(
-                  onPressed: () {
-                    Navigator.of(context)
-                        .popUntil((route) => route.isFirst);
-                  },
-                  child: const Text("Retour à l'accueil"),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+                      color: Colors.white,
+                      fontSize: 56,
+                      fontWeight: Fo
