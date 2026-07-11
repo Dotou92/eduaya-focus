@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/config_service.dart';
@@ -23,6 +24,8 @@ class EduAyoFocusApp extends StatelessWidget {
   }
 }
 
+// ------------------- ECRAN D'ACCUEIL -------------------
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -32,9 +35,6 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   bool _accessibilityGranted = false;
-  bool _blockingEnabled = false;
-  TimeOfDay _startTime = const TimeOfDay(hour: 8, minute: 0);
-  TimeOfDay _endTime = const TimeOfDay(hour: 17, minute: 0);
 
   @override
   void initState() {
@@ -44,57 +44,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadState() async {
     final granted = await ConfigService.isAccessibilityServiceEnabled();
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _accessibilityGranted = granted;
-      _blockingEnabled = prefs.getBool('blocking_enabled') ?? false;
-      _startTime = TimeOfDay(
-        hour: prefs.getInt('study_start_hour') ?? 8,
-        minute: prefs.getInt('study_start_minute') ?? 0,
-      );
-      _endTime = TimeOfDay(
-        hour: prefs.getInt('study_end_hour') ?? 17,
-        minute: prefs.getInt('study_end_minute') ?? 0,
-      );
-    });
-  }
-
-  Future<void> _toggleBlocking(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('blocking_enabled', value);
-    setState(() => _blockingEnabled = value);
-  }
-
-  Future<void> _pickStartTime() async {
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: _startTime,
-    );
-    if (picked != null) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt('study_start_hour', picked.hour);
-      await prefs.setInt('study_start_minute', picked.minute);
-      setState(() => _startTime = picked);
-    }
-  }
-
-  Future<void> _pickEndTime() async {
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: _endTime,
-    );
-    if (picked != null) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt('study_end_hour', picked.hour);
-      await prefs.setInt('study_end_minute', picked.minute);
-      setState(() => _endTime = picked);
-    }
-  }
-
-  String _formatTime(TimeOfDay t) {
-    final h = t.hour.toString().padLeft(2, '0');
-    final m = t.minute.toString().padLeft(2, '0');
-    return '${h}h$m';
+    setState(() => _accessibilityGranted = granted);
   }
 
   @override
@@ -111,50 +61,39 @@ class _HomeScreenState extends State<HomeScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              "Concentration pendant les heures d'étude",
+              "Concentration pendant vos sessions d'étude",
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
-            Text(
-              "Les réseaux sociaux sélectionnés seront bloqués automatiquement "
-              "entre ${_formatTime(_startTime)} et ${_formatTime(_endTime)}.",
-              style: const TextStyle(color: Colors.black54),
+            const Text(
+              "Choisissez une durée, sélectionnez les applications à "
+              "bloquer, puis démarrez votre session.",
+              style: TextStyle(color: Colors.black54),
             ),
             const SizedBox(height: 24),
             if (!_accessibilityGranted) _buildPermissionCard(),
-            if (_accessibilityGranted) ...[
-              _buildBlockingSwitch(),
-              const SizedBox(height: 24),
-              const Text(
-                "Créneau d'étude",
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              Card(
-                child: ListTile(
-                  leading: const Icon(Icons.play_arrow),
-                  title: const Text("Heure de début"),
-                  trailing: Text(
-                    _formatTime(_startTime),
-                    style: const TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.bold),
+            if (_accessibilityGranted)
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.play_circle_fill),
+                  label: const Text(
+                    "Nouvelle session de concentration",
+                    style: TextStyle(fontSize: 16),
                   ),
-                  onTap: _pickStartTime,
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                  ),
+                  onPressed: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const DurationScreen(),
+                      ),
+                    );
+                  },
                 ),
               ),
-              Card(
-                child: ListTile(
-                  leading: const Icon(Icons.stop),
-                  title: const Text("Heure de fin"),
-                  trailing: Text(
-                    _formatTime(_endTime),
-                    style: const TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                  onTap: _pickEndTime,
-                ),
-              ),
-            ],
           ],
         ),
       ),
@@ -192,15 +131,279 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+}
 
-  Widget _buildBlockingSwitch() {
-    return SwitchListTile(
-      title: const Text("Activer le blocage"),
-      subtitle: Text(_blockingEnabled
-          ? "Blocage actif pendant les heures d'étude"
-          : "Blocage désactivé"),
-      value: _blockingEnabled,
-      onChanged: _toggleBlocking,
+// ------------------- ECRAN CHOIX DE LA DUREE -------------------
+
+class DurationScreen extends StatelessWidget {
+  const DurationScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final options = [30, 60, 90, 120];
+    return Scaffold(
+      appBar: AppBar(title: const Text("Durée de la session")),
+      body: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              "Combien de temps souhaitez-vous étudier ?",
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 20),
+            ...options.map((minutes) => Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                      ),
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                AppSelectionScreen(minutes: minutes),
+                          ),
+                        );
+                      },
+                      child: Text(
+                        minutes < 60
+                            ? "$minutes minutes"
+                            : "${minutes ~/ 60}h${minutes % 60 == 0 ? '' : minutes % 60}",
+                        style: const TextStyle(fontSize: 16),
+                      ),
+                    ),
+                  ),
+                )),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ------------------- ECRAN SELECTION DES APPS -------------------
+
+class AppSelectionScreen extends StatefulWidget {
+  final int minutes;
+  const AppSelectionScreen({super.key, required this.minutes});
+
+  @override
+  State<AppSelectionScreen> createState() => _AppSelectionScreenState();
+}
+
+class _AppSelectionScreenState extends State<AppSelectionScreen> {
+  List<Map<String, String>> _apps = [];
+  Set<String> _selected = {};
+  bool _loading = true;
+
+  static const List<String> _knownSocialKeywords = [
+    'facebook',
+    'instagram',
+    'tiktok',
+    'musically',
+    'twitter',
+    'snapchat',
+    'youtube',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadApps();
+  }
+
+  Future<void> _loadApps() async {
+    final apps = await ConfigService.getInstalledApps();
+    final preselected = <String>{};
+    for (final app in apps) {
+      final pkg = (app['packageName'] ?? '').toLowerCase();
+      final name = (app['name'] ?? '').toLowerCase();
+      if (_knownSocialKeywords.any((k) => pkg.contains(k) || name.contains(k))) {
+        preselected.add(app['packageName']!);
+      }
+    }
+    setState(() {
+      _apps = apps;
+      _selected = preselected;
+      _loading = false;
+    });
+  }
+
+  Future<void> _startSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('blocked_apps', _selected.join(','));
+    await ConfigService.startSession(widget.minutes);
+
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SessionScreen(minutes: widget.minutes),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Applications à bloquer")),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    "${_selected.length} application(s) sélectionnée(s) "
+                    "pour cette session de ${widget.minutes} min",
+                    style: const TextStyle(color: Colors.black54),
+                  ),
+                ),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: _apps.length,
+                    itemBuilder: (context, index) {
+                      final app = _apps[index];
+                      final pkg = app['packageName']!;
+                      return CheckboxListTile(
+                        title: Text(app['name'] ?? pkg),
+                        value: _selected.contains(pkg),
+                        onChanged: (checked) {
+                          setState(() {
+                            if (checked == true) {
+                              _selected.add(pkg);
+                            } else {
+                              _selected.remove(pkg);
+                            }
+                          });
+                        },
+                      );
+                    },
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                      ),
+                      onPressed: _selected.isEmpty ? null : _startSession,
+                      child: const Text(
+                        "Valider et démarrer",
+                        style: TextStyle(fontSize: 16),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+}
+
+// ------------------- ECRAN SESSION VERROUILLEE -------------------
+
+class SessionScreen extends StatefulWidget {
+  final int minutes;
+  const SessionScreen({super.key, required this.minutes});
+
+  @override
+  State<SessionScreen> createState() => _SessionScreenState();
+}
+
+class _SessionScreenState extends State<SessionScreen> {
+  late int _secondsRemaining;
+  Timer? _timer;
+  bool _finished = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _secondsRemaining = widget.minutes * 60;
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_secondsRemaining <= 0) {
+        timer.cancel();
+        _onFinished();
+      } else {
+        setState(() => _secondsRemaining--);
+      }
+    });
+  }
+
+  Future<void> _onFinished() async {
+    setState(() => _finished = true);
+    await ConfigService.stopSession();
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  String _formatTime(int seconds) {
+    final m = (seconds ~/ 60).toString().padLeft(2, '0');
+    final s = (seconds % 60).toString().padLeft(2, '0');
+    return "$m:$s";
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: _finished,
+      child: Scaffold(
+        backgroundColor: Theme.of(context).primaryColor,
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (!_finished) ...[
+                const Icon(Icons.school, color: Colors.white, size: 64),
+                const SizedBox(height: 24),
+                const Text(
+                  "Concentration en cours",
+                  style: TextStyle(color: Colors.white70, fontSize: 18),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  _formatTime(_secondsRemaining),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 64,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ] else ...[
+                const Icon(Icons.check_circle, color: Colors.white, size: 72),
+                const SizedBox(height: 24),
+                const Text(
+                  "Bravo, session terminée !",
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(context)
+                        .popUntil((route) => route.isFirst);
+                  },
+                  child: const Text("Retour à l'accueil"),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
