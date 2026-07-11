@@ -19,13 +19,9 @@ class ConfigService {
   static Future<void> openAccessibilitySettings() async {
     try {
       await _accessibilityChannel.invokeMethod('openAccessibilitySettings');
-    } on PlatformException {
-      // Ignoré.
-    }
+    } on PlatformException {}
   }
 
-  /// Récupère la liste des applications installées sur le téléphone.
-  /// Retourne une liste de Map avec les clés 'name' et 'packageName'.
   static Future<List<Map<String, String>>> getInstalledApps() async {
     try {
       final List<dynamic> result =
@@ -38,21 +34,30 @@ class ConfigService {
     }
   }
 
-  /// Démarre le service de premier plan qui garde une notification
-  /// visible pendant toute la durée de la session.
-  static Future<void> startSession(int minutes) async {
+  static Future<void> startSession(int endHour, int endMinute) async {
     try {
-      await _sessionChannel.invokeMethod('startSession', {'minutes': minutes});
-    } on PlatformException {
-      // Ignoré.
-    }
+      await _sessionChannel.invokeMethod('startSession', {
+        'endHour': endHour,
+        'endMinute': endMinute,
+      });
+    } on PlatformException {}
   }
 
   static Future<void> stopSession() async {
     try {
       await _sessionChannel.invokeMethod('stopSession');
+    } on PlatformException {}
+  }
+
+  /// Retourne l'état réel de la session côté natif : actif, heure de
+  /// début, heure de fin, dernier "battement" enregistré. Utile pour
+  /// détecter une interruption (app gelée/tuée) au retour dans l'app.
+  static Future<Map<String, dynamic>> getSessionStatus() async {
+    try {
+      final result = await _sessionChannel.invokeMethod('getSessionStatus');
+      return Map<String, dynamic>.from(result as Map);
     } on PlatformException {
-      // Ignoré.
+      return {'active': false, 'startTime': 0, 'endTime': 0, 'lastHeartbeat': 0};
     }
   }
 }
