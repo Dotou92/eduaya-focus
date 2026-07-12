@@ -673,4 +673,46 @@ class _SessionScreenState extends State<SessionScreen>
     }
 
     return Column(
-      main
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: content,
+    );
+  }
+
+  Widget _buildFinishedContent() {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Icon(Icons.check_circle, color: Colors.white, size: 72),
+        const SizedBox(height: 24),
+        const Text(
+          "Bravo, session terminée !",
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 22,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 24),
+        ElevatedButton(
+          onPressed: () {
+            Navigator.of(context).popUntil((route) => route.isFirst);
+          },
+          child: const Text("Retour à l'accueil"),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: _finished,
+      child: Scaffold(
+        backgroundColor: Theme.of(context).primaryColor,
+        body: Center(
+          child: _finished ? _buildFinishedContent() : _buildActiveContent(),
+        ),
+      ),
+    );
+  }
+}
