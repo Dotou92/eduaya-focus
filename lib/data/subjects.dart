@@ -1,0 +1,33 @@
+/// Liste des matières du programme béninois (collège et lycée, toutes
+/// séries confondues), utilisée pour la sélection de matière avant une
+/// session d'étude.
+const List<String> subjectsList = [
+  'Français',
+  'Mathématiques',
+  'Anglais',
+  'Espagnol',
+  'Allemand',
+  'Histoire-Géographie',
+  'Sciences de la Vie et de la Terre (SVT)',
+  'Physique-Chimie',
+  'Physique-Chimie-Technologie (PCT)',
+  'Philosophie',
+  'Éducation Civique et Morale (ECM)',
+  'Éducation Physique et Sportive (EPS)',
+  'Arts Plastiques / Éducation Artistique',
+  'Informatique',
+  'Latin',
+  "Économie / Économie d'entreprise",
+  'Comptabilité',
+  'Droit',
+  'Mathématiques financières',
+  'Techniques de secrétariat',
+  'Techniques commerciales',
+  'Technologie / Génie mécanique, électrique ou civil',
+  'Économie Familiale et Sociale',
+  'Révision BEPC',
+  'Révision BAC',
+  "Préparation d'un devoir",
+  "Préparation d'un examen",
+  'Travail personnel / Lecture',
+];

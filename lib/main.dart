@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'data/subjects.dart';
 import 'services/config_service.dart';
 import 'services/session_summary.dart';
 
@@ -74,12 +75,21 @@ class _HomeScreenState extends State<HomeScreen> {
       final endDt = DateTime.fromMillisecondsSinceEpoch(endTime);
       await ConfigService.startSession(endDt.hour, endDt.minute);
 
+      final raw = prefs.getString('current_session_record');
+      final subject = raw == null
+          ? 'Non précisé'
+          : (Map<String, dynamic>.from(jsonDecode(raw))['subject']
+                  as String?) ??
+              'Non précisé';
+
       if (!mounted) {
         return;
       }
       Navigator.push(
         context,
-        MaterialPageRoute(builder: (_) => SessionScreen(endTime: endDt)),
+        MaterialPageRoute(
+          builder: (_) => SessionScreen(endTime: endDt, subject: subject),
+        ),
       );
     } else if (endTime > 0 && endTime <= now) {
       await _finalizeSession(completed: true);
@@ -129,7 +139,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _startNewSession() async {
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const EndTimeScreen()),
+      MaterialPageRoute(builder: (_) => const SubjectSelectionScreen()),
     );
     _loadHistory();
   }
@@ -255,6 +265,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final completed = record['completed'] == true;
     final interruptions = List<int>.from(record['interruptions'] ?? []);
     final apps = List<String>.from(record['appNames'] ?? []);
+    final subject = (record['subject'] as String?) ?? 'Non précisé';
 
     IconData icon;
     Color color;
@@ -275,7 +286,7 @@ class _HomeScreenState extends State<HomeScreen> {
         Icon(icon, color: color),
         const SizedBox(width: 8),
         Text(
-          "Session ${fmtTime(start)} - ${fmtTime(end)}",
+          "$subject · ${fmtTime(start)} - ${fmtTime(end)}",
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
       ],
@@ -346,10 +357,42 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
+// ------------------- CHOIX DE LA MATIERE -------------------
+
+class SubjectSelectionScreen extends StatelessWidget {
+  const SubjectSelectionScreen({super.key});
+
+  void _selectSubject(BuildContext context, String subject) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => EndTimeScreen(subject: subject)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Quelle matière ?")),
+      body: ListView.builder(
+        itemCount: subjectsList.length,
+        itemBuilder: (context, index) {
+          final subject = subjectsList[index];
+          return ListTile(
+            title: Text(subject),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _selectSubject(context, subject),
+          );
+        },
+      ),
+    );
+  }
+}
+
 // ------------------- CHOIX DE L'HEURE DE FIN -------------------
 
 class EndTimeScreen extends StatelessWidget {
-  const EndTimeScreen({super.key});
+  final String subject;
+  const EndTimeScreen({super.key, required this.subject});
 
   Future<void> _pickTime(BuildContext context) async {
     final now = TimeOfDay.now();
@@ -362,7 +405,7 @@ class EndTimeScreen extends StatelessWidget {
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => AppSelectionScreen(endTime: picked),
+          builder: (_) => AppSelectionScreen(endTime: picked, subject: subject),
         ),
       );
     }
@@ -409,7 +452,12 @@ class EndTimeScreen extends StatelessWidget {
 
 class AppSelectionScreen extends StatefulWidget {
   final TimeOfDay endTime;
-  const AppSelectionScreen({super.key, required this.endTime});
+  final String subject;
+  const AppSelectionScreen({
+    super.key,
+    required this.endTime,
+    required this.subject,
+  });
 
   @override
   State<AppSelectionScreen> createState() => _AppSelectionScreenState();
@@ -492,6 +540,7 @@ class _AppSelectionScreenState extends State<AppSelectionScreen> {
     final record = <String, dynamic>{
       'start': start.millisecondsSinceEpoch,
       'end': end.millisecondsSinceEpoch,
+      'subject': widget.subject,
       'appNames': selectedNames,
       'interruptions': <int>[],
       'completed': false,
@@ -507,7 +556,9 @@ class _AppSelectionScreenState extends State<AppSelectionScreen> {
     }
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(builder: (_) => SessionScreen(endTime: end)),
+      MaterialPageRoute(
+        builder: (_) => SessionScreen(endTime: end, subject: widget.subject),
+      ),
     );
   }
 
@@ -582,7 +633,12 @@ class _AppSelectionScreenState extends State<AppSelectionScreen> {
 
 class SessionScreen extends StatefulWidget {
   final DateTime endTime;
-  const SessionScreen({super.key, required this.endTime});
+  final String subject;
+  const SessionScreen({
+    super.key,
+    required this.endTime,
+    required this.subject,
+  });
 
   @override
   State<SessionScreen> createState() => _SessionScreenState();
@@ -690,6 +746,15 @@ class _SessionScreenState extends State<SessionScreen>
     final content = <Widget>[];
     content.add(const Icon(Icons.school, color: Colors.white, size: 64));
     content.add(const SizedBox(height: 20));
+    content.add(Text(
+      widget.subject,
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 20,
+        fontWeight: FontWeight.bold,
+      ),
+    ));
+    content.add(const SizedBox(height: 4));
     content.add(Text(
       "Session en cours jusqu'à ${fmtTime(widget.endTime)}",
       style: const TextStyle(color: Colors.white70, fontSize: 18),
