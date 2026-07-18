@@ -1,0 +1,30 @@
+<!--
+    CE FICHIER NE DOIT PAS ÊTRE UTILISÉ TEL QUEL.
+    C'est un guide : après avoir lancé "flutter create .", Flutter génère
+    automatiquement un vrai AndroidManifest.xml au même endroit. Il faut
+    y AJOUTER les lignes ci-dessous (permissions + déclaration du service),
+    sans supprimer ce qui existe déjà.
+-->
+
+<!-- 1. À ajouter juste avant la balise <application ...> -->
+<uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+    tools:ignore="ProtectedPermissions" />
+<uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+    tools:ignore="QueryAllPackagesPermission" />
+
+<!-- 2. N'oubliez pas d'ajouter xmlns:tools="http://schemas.android.com/tools"
+        dans la balise <manifest> tout en haut du fichier si elle n'y est pas déjà -->
+
+<!-- 3. À ajouter à L'INTÉRIEUR de la balise <application ...>, au même niveau
+        que la balise <activity> générée par Flutter -->
+<service
+    android:name=".BlockerAccessibilityService"
+    android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+    android:exported="false">
+    <intent-filter>
+        <action android:name="android.accessibilityservice.AccessibilityService" />
+    </intent-filter>
+    <meta-data
+        android:name="android.accessibilityservice"
+        android:resource="@xml/accessibility_service_config" />
+</service>

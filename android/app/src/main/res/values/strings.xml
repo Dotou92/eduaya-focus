@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">EduAya Focus</string>
+    <string name="accessibility_service_description">
+        EduAya Focus utilise ce service pour détecter quand une application de réseau
+        social est ouverte pendant vos heures d\'étude configurées, afin de vous
+        ramener automatiquement à l\'écran d\'accueil et vous aider à rester concentré.
+        Aucune donnée personnelle n\'est collectée ou transmise.
+    </string>
+</resources>
