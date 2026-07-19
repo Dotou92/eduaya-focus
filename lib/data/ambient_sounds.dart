@@ -1,7 +1,9 @@
 /// Bibliothèque de sons d'ambiance disponibles pendant une session
-/// (§4 du cahier des charges). Les fichiers audio réels doivent être
-/// déposés dans assets/sounds/ (voir assets/sounds/README.md) — ils ne
-/// sont pas fournis avec le code.
+/// (§4 du cahier des charges). Le cahier des charges prévoyait 8
+/// ambiances par catégorie (pluie, bruit blanc, forêt...), mais les 6
+/// morceaux réellement fournis sont des musiques instrumentales
+/// calmes plutôt que des bruitages nature précis — la liste ci-dessous
+/// reflète honnêtement ce qui est disponible dans assets/sounds/.
 class AmbientSound {
   const AmbientSound(this.id, this.label, this.assetPath);
 
@@ -13,16 +15,18 @@ class AmbientSound {
 }
 
 const List<AmbientSound> ambientSounds = [
-  AmbientSound('pluie', 'Pluie', 'sounds/pluie.mp3'),
-  AmbientSound('bruit_blanc', 'Bruit blanc', 'sounds/bruit_blanc.mp3'),
-  AmbientSound('foret', 'Forêt', 'sounds/foret.mp3'),
-  AmbientSound('riviere', 'Rivière', 'sounds/riviere.mp3'),
-  AmbientSound('vent', 'Vent', 'sounds/vent.mp3'),
+  AmbientSound('mont_blanc', 'Mont Blanc', 'sounds/mont_blanc.mp3'),
+  AmbientSound('calme_elegant', 'Calme élégant', 'sounds/calme_elegant.mp3'),
   AmbientSound(
-    'musique_instrumentale',
-    'Musique instrumentale',
-    'sounds/musique_instrumentale.mp3',
+    'calme_inspirant',
+    'Calme inspirant',
+    'sounds/calme_inspirant.mp3',
   ),
-  AmbientSound('bibliotheque', 'Ambiance bibliothèque', 'sounds/bibliotheque.mp3'),
-  AmbientSound('cafe_etude', "Ambiance café d'étude", 'sounds/cafe_etude.mp3'),
+  AmbientSound(
+    'merveilles_terre',
+    'Merveilles de la Terre',
+    'sounds/merveilles_terre.mp3',
+  ),
+  AmbientSound('royaume_blanc', 'Le Royaume Blanc', 'sounds/royaume_blanc.mp3'),
+  AmbientSound('moment_de_paix', 'Moment de paix', 'sounds/moment_de_paix.mp3'),
 ];

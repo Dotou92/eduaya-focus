@@ -1316,8 +1316,7 @@ class _SessionScreenState extends State<SessionScreen>
     if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(
-          "Fichier audio introuvable pour \"${sound.label}\" "
-          "(voir assets/sounds/README.md).",
+          "Impossible de lire \"${sound.label}\" pour le moment.",
         ),
       ));
       return;
