@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'data/ambient_sounds.dart';
+import 'data/session_duration.dart';
 import 'data/subjects.dart';
 import 'services/badges.dart';
 import 'services/challenges.dart';
@@ -811,11 +812,14 @@ class EndTimeScreen extends StatelessWidget {
   const EndTimeScreen({super.key, required this.subject});
 
   Future<void> _pickTime(BuildContext context) async {
-    final now = TimeOfDay.now();
-    final initial = TimeOfDay(hour: (now.hour + 1) % 24, minute: now.minute);
+    final recommended = recommendedDurationFor(subject);
+    final recommendedEnd =
+        DateTime.now().add(Duration(minutes: recommended.focusMinutes));
+    final initial = TimeOfDay.fromDateTime(recommendedEnd);
     final picked = await showTimePicker(
       context: context,
       initialTime: initial,
+      helpText: "Heure de fin (suggestion : ${fmtTime(recommendedEnd)})",
     );
     if (picked != null && context.mounted) {
       Navigator.push(
@@ -829,6 +833,8 @@ class EndTimeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final recommended = recommendedDurationFor(subject);
+
     return Scaffold(
       appBar: AppBar(title: const Text("Heure de fin de session")),
       body: Padding(
@@ -844,6 +850,28 @@ class EndTimeScreen extends StatelessWidget {
             const Text(
               "Choisissez une heure réaliste pour rester concentré sans vous surcharger.",
               style: TextStyle(color: Colors.black54),
+            ),
+            const SizedBox(height: 16),
+            Card(
+              color: Colors.indigo[50],
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.timer_outlined, color: Colors.indigo),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        "Durée recommandée pour \"$subject\" : "
+                        "${recommended.focusMinutes} min de travail, "
+                        "pause de ${recommended.breakMinutes} min conseillée. "
+                        "Modifiable librement ci-dessous.",
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
             const SizedBox(height: 24),
             SizedBox(
@@ -939,10 +967,7 @@ class _AppSelectionScreenState extends State<AppSelectionScreen> {
     return end;
   }
 
-  Future<void> _startSession() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('blocked_apps', _selected.join(','));
-
+  void _goToEngagement() {
     final selectedNames = <String>[];
     for (final a in _apps) {
       if (_selected.contains(a['packageName'])) {
@@ -950,36 +975,14 @@ class _AppSelectionScreenState extends State<AppSelectionScreen> {
       }
     }
 
-    final start = DateTime.now();
-    final end = _resolveEndDateTime();
-
-    final record = <String, dynamic>{
-      'start': start.millisecondsSinceEpoch,
-      'end': end.millisecondsSinceEpoch,
-      'subject': widget.subject,
-      'appNames': selectedNames,
-      'interruptions': <int>[],
-      'completed': false,
-    };
-    await prefs.setString('current_session_record', jsonEncode(record));
-    await prefs.setBool('session_in_progress', true);
-
-    final personalBest =
-        MotivationCoach.personalBestMinutes(loadSessionHistory(prefs));
-
-    await ConfigService.startSession(
-        widget.endTime.hour, widget.endTime.minute);
-
-    if (!mounted) {
-      return;
-    }
-    Navigator.pushReplacement(
+    Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => SessionScreen(
-          endTime: end,
+        builder: (_) => EngagementScreen(
+          endDateTime: _resolveEndDateTime(),
           subject: widget.subject,
-          personalBestMinutes: personalBest,
+          selectedPackages: _selected,
+          selectedNames: selectedNames,
         ),
       ),
     );
@@ -1038,15 +1041,120 @@ class _AppSelectionScreenState extends State<AppSelectionScreen> {
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
-                onPressed: _selected.isEmpty ? null : _startSession,
+                onPressed: _selected.isEmpty ? null : _goToEngagement,
                 child: const Text(
-                  "Valider et démarrer",
+                  "Valider et continuer",
                   style: TextStyle(fontSize: 16),
                 ),
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ------------------- CONFIRMATION D'ENGAGEMENT -------------------
+
+class EngagementScreen extends StatelessWidget {
+  final DateTime endDateTime;
+  final String subject;
+  final Set<String> selectedPackages;
+  final List<String> selectedNames;
+
+  const EngagementScreen({
+    super.key,
+    required this.endDateTime,
+    required this.subject,
+    required this.selectedPackages,
+    required this.selectedNames,
+  });
+
+  Future<void> _confirmAndStart(BuildContext context) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('blocked_apps', selectedPackages.join(','));
+
+    final start = DateTime.now();
+    final record = <String, dynamic>{
+      'start': start.millisecondsSinceEpoch,
+      'end': endDateTime.millisecondsSinceEpoch,
+      'subject': subject,
+      'appNames': selectedNames,
+      'interruptions': <int>[],
+      'completed': false,
+    };
+    await prefs.setString('current_session_record', jsonEncode(record));
+    await prefs.setBool('session_in_progress', true);
+
+    final personalBest =
+        MotivationCoach.personalBestMinutes(loadSessionHistory(prefs));
+
+    final endTimeOfDay = TimeOfDay.fromDateTime(endDateTime);
+    await ConfigService.startSession(endTimeOfDay.hour, endTimeOfDay.minute);
+
+    if (!context.mounted) {
+      return;
+    }
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SessionScreen(
+          endTime: endDateTime,
+          subject: subject,
+          personalBestMinutes: personalBest,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Engagement")),
+      body: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Icon(
+              Icons.handshake_outlined,
+              size: 64,
+              color: Colors.indigo,
+            ),
+            const SizedBox(height: 24),
+            Text(
+              "Je m'engage à ne pas interrompre cette session "
+              "avant ${fmtTime(endDateTime)}.",
+              textAlign: TextAlign.center,
+              style:
+                  const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              "Matière : $subject",
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.black54, fontSize: 15),
+            ),
+            const SizedBox(height: 32),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 18),
+              ),
+              onPressed: () => _confirmAndStart(context),
+              child: const Text(
+                "Je m'engage — Démarrer",
+                style: TextStyle(fontSize: 16),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Retour"),
+            ),
+          ],
+        ),
       ),
     );
   }
