@@ -26,11 +26,8 @@ class ChallengeEvaluator {
     List<Map<String, dynamic>> records, {
     DateTime? now,
   }) {
-    final today = now ?? DateTime.now();
-    final todayDate = DateTime(today.year, today.month, today.day);
-
-    final cleanStreak = _computeCleanDayStreak(records, todayDate);
-    final totalHours = _computeTotalHours(records);
+    final cleanStreak = cleanDayStreak(records, now: now);
+    final totalHours = totalStudyHours(records);
 
     return [
       Challenge(
@@ -59,11 +56,14 @@ class ChallengeEvaluator {
 
   /// Nombre de jours consécutifs (jusqu'à aujourd'hui) ayant eu au moins
   /// une session, et dont toutes les sessions du jour sont sans
-  /// interruption.
-  static int _computeCleanDayStreak(
-    List<Map<String, dynamic>> records,
-    DateTime todayDate,
-  ) {
+  /// interruption. Réutilisé par le module "objectifs personnalisés".
+  static int cleanDayStreak(
+    List<Map<String, dynamic>> records, {
+    DateTime? now,
+  }) {
+    final today = now ?? DateTime.now();
+    final todayDate = DateTime(today.year, today.month, today.day);
+
     final daysWithSessions = <DateTime>{};
     final dayHasInterruption = <DateTime, bool>{};
 
@@ -93,7 +93,8 @@ class ChallengeEvaluator {
     return streak;
   }
 
-  static double _computeTotalHours(List<Map<String, dynamic>> records) {
+  /// Total d'heures d'étude cumulées (toutes sessions confondues).
+  static double totalStudyHours(List<Map<String, dynamic>> records) {
     var totalMillis = 0;
     for (final r in records) {
       final start = r['start'] as int;

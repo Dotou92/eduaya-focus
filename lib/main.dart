@@ -8,6 +8,7 @@ import 'services/badges.dart';
 import 'services/challenges.dart';
 import 'services/config_service.dart';
 import 'services/focus_score.dart';
+import 'services/goals.dart';
 import 'services/motivation_coach.dart';
 import 'services/session_summary.dart';
 import 'services/sound_service.dart';
@@ -54,6 +55,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   bool _accessibilityGranted = false;
   List<Map<String, dynamic>> _history = [];
+  StudyGoals _goals = StudyGoals.defaults;
 
   @override
   void initState() {
@@ -68,6 +70,7 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     await _checkForInterruptedSession();
     await _loadHistory();
+    await _loadGoals();
   }
 
   Future<void> _checkForInterruptedSession() async {
@@ -163,6 +166,21 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadHistory();
   }
 
+  Future<void> _loadGoals() async {
+    final goals = await GoalsService.load();
+    setState(() {
+      _goals = goals;
+    });
+  }
+
+  Future<void> _openGoalsScreen() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => GoalsScreen(goals: _goals)),
+    );
+    _loadGoals();
+  }
+
   Future<void> _grantPermission() async {
     await ConfigService.openAccessibilitySettings();
     await Future.delayed(const Duration(seconds: 1));
@@ -188,6 +206,8 @@ class _HomeScreenState extends State<HomeScreen> {
     ));
     children.add(const SizedBox(height: 16));
     children.add(_buildFocusScoreCard());
+    children.add(const SizedBox(height: 12));
+    children.add(_buildGoalsCard());
     children.add(const SizedBox(height: 12));
     children.add(_buildChallengesCard());
     children.add(const SizedBox(height: 12));
@@ -236,6 +256,13 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('EduAya Focus'),
         backgroundColor: Theme.of(context).primaryColor,
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.flag_outlined),
+            tooltip: "Mes objectifs",
+            onPressed: _openGoalsScreen,
+          ),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: _loadHistory,
@@ -304,6 +331,67 @@ class _HomeScreenState extends State<HomeScreen> {
                         ))
                     .toList(),
               ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGoalsCard() {
+    final records = _history
+        .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e))
+        .toList();
+    final progress = GoalProgress.compute(records);
+
+    final rows = [
+      _GoalRow(
+        label: "Aujourd'hui",
+        progress: progress.todayHours,
+        target: _goals.hoursPerDay,
+        unit: 'h',
+        decimals: 1,
+      ),
+      _GoalRow(
+        label: 'Cette semaine',
+        progress: progress.weekSessions.toDouble(),
+        target: _goals.sessionsPerWeek.toDouble(),
+        unit: 'séances',
+        decimals: 0,
+      ),
+      _GoalRow(
+        label: 'Jours sans interruption',
+        progress: progress.cleanStreakDays.toDouble(),
+        target: _goals.consecutiveDaysNoInterruption.toDouble(),
+        unit: 'jours',
+        decimals: 0,
+      ),
+    ];
+
+    return Card(
+      color: Colors.orange[50],
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Mes objectifs',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _openGoalsScreen,
+                  child: const Text('Modifier'),
+                ),
+              ],
+            ),
+            for (final row in rows) ...[
+              row,
+              const SizedBox(height: 8),
             ],
           ],
         ),
@@ -499,6 +587,159 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _GoalRow extends StatelessWidget {
+  final String label;
+  final double progress;
+  final double target;
+  final String unit;
+  final int decimals;
+
+  const _GoalRow({
+    required this.label,
+    required this.progress,
+    required this.target,
+    required this.unit,
+    required this.decimals,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final ratio = target <= 0 ? 0.0 : (progress / target).clamp(0.0, 1.0);
+    final reached = progress >= target;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(label, style: const TextStyle(fontSize: 13)),
+            ),
+            Text(
+              "${progress.toStringAsFixed(decimals)}/"
+              "${target.toStringAsFixed(decimals)} $unit",
+              style: TextStyle(
+                fontSize: 12,
+                color: reached ? Colors.deepOrange : Colors.black54,
+                fontWeight: reached ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: ratio,
+            minHeight: 6,
+            backgroundColor: Colors.orange[100],
+            color: reached ? Colors.deepOrange : Colors.orange[300],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ------------------- MES OBJECTIFS -------------------
+
+class GoalsScreen extends StatefulWidget {
+  final StudyGoals goals;
+  const GoalsScreen({super.key, required this.goals});
+
+  @override
+  State<GoalsScreen> createState() => _GoalsScreenState();
+}
+
+class _GoalsScreenState extends State<GoalsScreen> {
+  late double _hoursPerDay;
+  late int _sessionsPerWeek;
+  late int _consecutiveDays;
+
+  @override
+  void initState() {
+    super.initState();
+    _hoursPerDay = widget.goals.hoursPerDay;
+    _sessionsPerWeek = widget.goals.sessionsPerWeek;
+    _consecutiveDays = widget.goals.consecutiveDaysNoInterruption;
+  }
+
+  Future<void> _save() async {
+    await GoalsService.save(StudyGoals(
+      hoursPerDay: _hoursPerDay,
+      sessionsPerWeek: _sessionsPerWeek,
+      consecutiveDaysNoInterruption: _consecutiveDays,
+    ));
+    if (!mounted) {
+      return;
+    }
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Mes objectifs")),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          Text(
+            "Heures d'étude par jour : ${_hoursPerDay.toStringAsFixed(1)} h",
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          Slider(
+            value: _hoursPerDay,
+            min: 0.5,
+            max: 8,
+            divisions: 15,
+            label: "${_hoursPerDay.toStringAsFixed(1)} h",
+            onChanged: (value) => setState(() => _hoursPerDay = value),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            "Séances par semaine : $_sessionsPerWeek",
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          Slider(
+            value: _sessionsPerWeek.toDouble(),
+            min: 1,
+            max: 21,
+            divisions: 20,
+            label: "$_sessionsPerWeek",
+            onChanged: (value) =>
+                setState(() => _sessionsPerWeek = value.round()),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            "Jours sans interruption consécutifs : $_consecutiveDays",
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          Slider(
+            value: _consecutiveDays.toDouble(),
+            min: 1,
+            max: 30,
+            divisions: 29,
+            label: "$_consecutiveDays",
+            onChanged: (value) =>
+                setState(() => _consecutiveDays = value.round()),
+          ),
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _save,
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+              ),
+              child: const Text("Enregistrer"),
+            ),
+          ),
+        ],
       ),
     );
   }
