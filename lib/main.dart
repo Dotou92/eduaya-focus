@@ -10,6 +10,8 @@ import 'services/config_service.dart';
 import 'services/focus_score.dart';
 import 'services/goals.dart';
 import 'services/motivation_coach.dart';
+import 'services/planned_session.dart';
+import 'services/planning_service.dart';
 import 'services/session_summary.dart';
 import 'services/sound_service.dart';
 
@@ -257,6 +259,16 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: Theme.of(context).primaryColor,
         foregroundColor: Colors.white,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.calendar_month_outlined),
+            tooltip: "Calendrier",
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const PlanningScreen()),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.flag_outlined),
             tooltip: "Mes objectifs",
@@ -1374,6 +1386,230 @@ class _SessionScreenState extends State<SessionScreen>
                   _selectedSound == null ? Icons.music_off : Icons.music_note,
                 ),
               ),
+      ),
+    );
+  }
+}
+
+// ------------------- CALENDRIER -------------------
+
+class PlanningScreen extends StatefulWidget {
+  const PlanningScreen({super.key});
+
+  @override
+  State<PlanningScreen> createState() => _PlanningScreenState();
+}
+
+class _PlanningScreenState extends State<PlanningScreen> {
+  DateTime _selectedDay = DateTime.now();
+  List<PlannedSession> _sessions = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final sessions = await PlanningService.load();
+    setState(() {
+      _sessions = sessions;
+    });
+  }
+
+  List<PlannedSession> get _sessionsForSelectedDay {
+    final list = _sessions
+        .where((s) =>
+            s.dateTime.year == _selectedDay.year &&
+            s.dateTime.month == _selectedDay.month &&
+            s.dateTime.day == _selectedDay.day)
+        .toList();
+    list.sort((a, b) => a.dateTime.compareTo(b.dateTime));
+    return list;
+  }
+
+  Future<void> _addSession() async {
+    final result = await showModalBottomSheet<PlannedSession>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _AddPlannedSessionSheet(day: _selectedDay),
+    );
+    if (result != null) {
+      await PlanningService.add(result);
+      _load();
+    }
+  }
+
+  Future<void> _removeSession(PlannedSession session) async {
+    await PlanningService.remove(session.id);
+    _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final daySessions = _sessionsForSelectedDay;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Calendrier')),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _addSession,
+        tooltip: 'Planifier une séance',
+        child: const Icon(Icons.add),
+      ),
+      body: ListView(
+        children: [
+          CalendarDatePicker(
+            initialDate: _selectedDay,
+            firstDate: DateTime.now().subtract(const Duration(days: 365)),
+            lastDate: DateTime.now().add(const Duration(days: 365)),
+            onDateChanged: (date) {
+              setState(() {
+                _selectedDay = date;
+              });
+            },
+          ),
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Text(
+              "Séances du "
+              "${_selectedDay.day.toString().padLeft(2, '0')}/"
+              "${_selectedDay.month.toString().padLeft(2, '0')}/"
+              "${_selectedDay.year}",
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          if (daySessions.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Text(
+                "Aucune séance planifiée ce jour-là.",
+                style: TextStyle(color: Colors.black54),
+              ),
+            )
+          else
+            for (final session in daySessions)
+              ListTile(
+                leading: const Icon(Icons.event_note),
+                title: Text(session.subject),
+                subtitle: Text(
+                  "${fmtTime(session.dateTime)} • ${session.durationMinutes} min",
+                ),
+                trailing: IconButton(
+                  icon: const Icon(Icons.delete_outline),
+                  onPressed: () => _removeSession(session),
+                ),
+              ),
+          const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+}
+
+class _AddPlannedSessionSheet extends StatefulWidget {
+  final DateTime day;
+  const _AddPlannedSessionSheet({required this.day});
+
+  @override
+  State<_AddPlannedSessionSheet> createState() =>
+      _AddPlannedSessionSheetState();
+}
+
+class _AddPlannedSessionSheetState extends State<_AddPlannedSessionSheet> {
+  String _subject = subjectsList.first;
+  TimeOfDay _time = TimeOfDay.now();
+  int _durationMinutes = 50;
+
+  Future<void> _pickTime() async {
+    final picked = await showTimePicker(context: context, initialTime: _time);
+    if (picked != null) {
+      setState(() {
+        _time = picked;
+      });
+    }
+  }
+
+  void _confirm() {
+    final dateTime = DateTime(
+      widget.day.year,
+      widget.day.month,
+      widget.day.day,
+      _time.hour,
+      _time.minute,
+    );
+    Navigator.pop(
+      context,
+      PlannedSession(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        subject: _subject,
+        dateTime: dateTime,
+        durationMinutes: _durationMinutes,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 20,
+        right: 20,
+        top: 20,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            "Planifier une séance",
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          ),
+          const SizedBox(height: 16),
+          DropdownButtonFormField<String>(
+            value: _subject,
+            decoration: const InputDecoration(labelText: "Matière"),
+            items: [
+              for (final s in subjectsList)
+                DropdownMenuItem(value: s, child: Text(s)),
+            ],
+            onChanged: (value) {
+              setState(() {
+                _subject = value ?? _subject;
+              });
+            },
+          ),
+          const SizedBox(height: 12),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text("Heure"),
+            trailing: Text(_time.format(context)),
+            onTap: _pickTime,
+          ),
+          const SizedBox(height: 12),
+          Text("Durée : $_durationMinutes min"),
+          Slider(
+            value: _durationMinutes.toDouble(),
+            min: 15,
+            max: 180,
+            divisions: 33,
+            label: "$_durationMinutes min",
+            onChanged: (value) {
+              setState(() {
+                _durationMinutes = value.round();
+              });
+            },
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _confirm,
+              child: const Text("Planifier"),
+            ),
+          ),
+        ],
       ),
     );
   }
