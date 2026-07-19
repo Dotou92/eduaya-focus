@@ -2,12 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'data/ambient_sounds.dart';
 import 'data/subjects.dart';
 import 'services/badges.dart';
 import 'services/challenges.dart';
 import 'services/config_service.dart';
 import 'services/focus_score.dart';
 import 'services/session_summary.dart';
+import 'services/sound_service.dart';
 
 void main() {
   runApp(const EduAyoFocusApp());
@@ -780,6 +782,8 @@ class _SessionScreenState extends State<SessionScreen>
   Timer? _timer;
   bool _finished = false;
   List<String> _blockedAppNames = [];
+  AmbientSound? _selectedSound;
+  double _soundVolume = 0.5;
 
   @override
   void initState() {
@@ -854,13 +858,110 @@ class _SessionScreenState extends State<SessionScreen>
     }
     await prefs.setBool('session_in_progress', false);
     await ConfigService.stopSession();
+    await SoundService.stop();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
+    SoundService.stop();
     super.dispose();
+  }
+
+  Future<void> _selectSound(AmbientSound? sound) async {
+    if (sound == null) {
+      await SoundService.stop();
+      setState(() {
+        _selectedSound = null;
+      });
+      return;
+    }
+
+    final ok = await SoundService.play(sound.assetPath, volume: _soundVolume);
+    if (!mounted) {
+      return;
+    }
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          "Fichier audio introuvable pour \"${sound.label}\" "
+          "(voir assets/sounds/README.md).",
+        ),
+      ));
+      return;
+    }
+    setState(() {
+      _selectedSound = sound;
+    });
+  }
+
+  void _openSoundPicker() {
+    showModalBottomSheet(
+      context: context,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (sheetContext, setSheetState) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      "Ambiance sonore",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    RadioListTile<AmbientSound?>(
+                      title: const Text("Aucun son"),
+                      value: null,
+                      groupValue: _selectedSound,
+                      onChanged: (value) {
+                        _selectSound(value);
+                        setSheetState(() {});
+                      },
+                    ),
+                    for (final sound in ambientSounds)
+                      RadioListTile<AmbientSound?>(
+                        title: Text(sound.label),
+                        value: sound,
+                        groupValue: _selectedSound,
+                        onChanged: (value) {
+                          _selectSound(value);
+                          setSheetState(() {});
+                        },
+                      ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        const Icon(Icons.volume_down),
+                        Expanded(
+                          child: Slider(
+                            value: _soundVolume,
+                            onChanged: (value) {
+                              setState(() {
+                                _soundVolume = value;
+                              });
+                              setSheetState(() {});
+                              SoundService.setVolume(value);
+                            },
+                          ),
+                        ),
+                        const Icon(Icons.volume_up),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   String _remainingText() {
@@ -912,6 +1013,23 @@ class _SessionScreenState extends State<SessionScreen>
       ));
     }
 
+    content.add(const SizedBox(height: 8));
+    content.add(Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(
+          _selectedSound == null ? Icons.music_off : Icons.music_note,
+          color: Colors.white60,
+          size: 16,
+        ),
+        const SizedBox(width: 6),
+        Text(
+          _selectedSound?.label ?? "Aucune ambiance sonore",
+          style: const TextStyle(color: Colors.white60, fontSize: 13),
+        ),
+      ],
+    ));
+
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: content,
@@ -952,6 +1070,15 @@ class _SessionScreenState extends State<SessionScreen>
         body: Center(
           child: _finished ? _buildFinishedContent() : _buildActiveContent(),
         ),
+        floatingActionButton: _finished
+            ? null
+            : FloatingActionButton(
+                onPressed: _openSoundPicker,
+                tooltip: "Ambiance sonore",
+                child: Icon(
+                  _selectedSound == null ? Icons.music_off : Icons.music_note,
+                ),
+              ),
       ),
     );
   }
