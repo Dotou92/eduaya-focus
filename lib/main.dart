@@ -8,6 +8,7 @@ import 'services/badges.dart';
 import 'services/challenges.dart';
 import 'services/config_service.dart';
 import 'services/focus_score.dart';
+import 'services/motivation_coach.dart';
 import 'services/session_summary.dart';
 import 'services/sound_service.dart';
 
@@ -33,6 +34,13 @@ String fmtTime(DateTime t) {
   final h = t.hour.toString().padLeft(2, '0');
   final m = t.minute.toString().padLeft(2, '0');
   return "${h}h$m";
+}
+
+List<Map<String, dynamic>> loadSessionHistory(SharedPreferences prefs) {
+  final raw = prefs.getStringList('session_history') ?? [];
+  return raw
+      .map((s) => Map<String, dynamic>.from(jsonDecode(s)))
+      .toList();
 }
 
 // ------------------- ACCUEIL -------------------
@@ -86,6 +94,8 @@ class _HomeScreenState extends State<HomeScreen> {
           : (Map<String, dynamic>.from(jsonDecode(raw))['subject']
                   as String?) ??
               'Non précisé';
+      final personalBest =
+          MotivationCoach.personalBestMinutes(loadSessionHistory(prefs));
 
       if (!mounted) {
         return;
@@ -93,7 +103,11 @@ class _HomeScreenState extends State<HomeScreen> {
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => SessionScreen(endTime: endDt, subject: subject),
+          builder: (_) => SessionScreen(
+            endTime: endDt,
+            subject: subject,
+            personalBestMinutes: personalBest,
+          ),
         ),
       );
     } else if (endTime > 0 && endTime <= now) {
@@ -681,6 +695,9 @@ class _AppSelectionScreenState extends State<AppSelectionScreen> {
     await prefs.setString('current_session_record', jsonEncode(record));
     await prefs.setBool('session_in_progress', true);
 
+    final personalBest =
+        MotivationCoach.personalBestMinutes(loadSessionHistory(prefs));
+
     await ConfigService.startSession(
         widget.endTime.hour, widget.endTime.minute);
 
@@ -690,7 +707,11 @@ class _AppSelectionScreenState extends State<AppSelectionScreen> {
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
-        builder: (_) => SessionScreen(endTime: end, subject: widget.subject),
+        builder: (_) => SessionScreen(
+          endTime: end,
+          subject: widget.subject,
+          personalBestMinutes: personalBest,
+        ),
       ),
     );
   }
@@ -767,10 +788,12 @@ class _AppSelectionScreenState extends State<AppSelectionScreen> {
 class SessionScreen extends StatefulWidget {
   final DateTime endTime;
   final String subject;
+  final int? personalBestMinutes;
   const SessionScreen({
     super.key,
     required this.endTime,
     required this.subject,
+    this.personalBestMinutes,
   });
 
   @override
@@ -784,24 +807,30 @@ class _SessionScreenState extends State<SessionScreen>
   List<String> _blockedAppNames = [];
   AmbientSound? _selectedSound;
   double _soundVolume = 0.5;
+  DateTime? _startTime;
+  bool _hadInterruptionThisSession = false;
+  final Set<CoachTrigger> _triggeredCoachMessages = {};
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _loadBlockedAppNames();
+    _loadSessionRecord();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       _tick();
     });
   }
 
-  Future<void> _loadBlockedAppNames() async {
+  Future<void> _loadSessionRecord() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString('current_session_record');
     if (raw != null) {
       final record = Map<String, dynamic>.from(jsonDecode(raw));
+      final interruptions = List<int>.from(record['interruptions'] ?? []);
       setState(() {
         _blockedAppNames = List<String>.from(record['appNames'] ?? []);
+        _startTime = DateTime.fromMillisecondsSinceEpoch(record['start']);
+        _hadInterruptionThisSession = interruptions.isNotEmpty;
       });
     }
   }
@@ -811,8 +840,32 @@ class _SessionScreenState extends State<SessionScreen>
       _timer?.cancel();
       _onFinished();
     } else {
+      _checkCoachTriggers();
       setState(() {});
     }
+  }
+
+  void _checkCoachTriggers() {
+    final start = _startTime;
+    if (start == null) {
+      return;
+    }
+    final trigger = MotivationCoach.checkTriggers(
+      start: start,
+      end: widget.endTime,
+      now: DateTime.now(),
+      hasInterruptionThisSession: _hadInterruptionThisSession,
+      personalBestMinutes: widget.personalBestMinutes,
+      alreadyTriggered: _triggeredCoachMessages,
+    );
+    if (trigger == null) {
+      return;
+    }
+    _triggeredCoachMessages.add(trigger);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(MotivationCoach.messages[trigger]!),
+      duration: const Duration(seconds: 4),
+    ));
   }
 
   @override
@@ -837,6 +890,7 @@ class _SessionScreenState extends State<SessionScreen>
         record['interruptions'] = interruptions;
         await prefs.setString('current_session_record', jsonEncode(record));
       }
+      _hadInterruptionThisSession = true;
       final endAsTime = TimeOfDay.fromDateTime(widget.endTime);
       await ConfigService.startSession(endAsTime.hour, endAsTime.minute);
     }
