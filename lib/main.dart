@@ -16,14 +16,89 @@ import 'services/config_service.dart';
 import 'services/focus_score.dart';
 import 'services/goals.dart';
 import 'services/motivation_coach.dart';
+import 'services/navigation.dart';
+import 'services/notification_service.dart';
 import 'services/planned_session.dart';
 import 'services/planning_service.dart';
+import 'services/recurrence.dart';
 import 'services/session_summary.dart';
 import 'services/sound_service.dart';
 import 'services/weekly_report.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  NotificationService.onResponse = handleNotificationInfo;
+  // Renseigné si l'app vient d'être relancée en tapant une
+  // notification (app totalement fermée avant le tap).
+  final launchInfo = await NotificationService.getLaunchDetails();
   runApp(const EduAyoFocusApp());
+  if (launchInfo != null) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      handleNotificationInfo(launchInfo);
+    });
+  }
+}
+
+/// Démarre immédiatement une séance planifiée (bouton "Démarrer
+/// maintenant" d'une notification), en réutilisant la même logique de
+/// démarrage que le parcours manuel (EngagementScreen).
+Future<void> startPlannedSessionNow(PlannedSession planned) async {
+  await PlanningService.markStarted(planned.id);
+
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString('blocked_apps', planned.blockedPackages.join(','));
+
+  final start = DateTime.now();
+  final end = start.add(Duration(minutes: planned.durationMinutes));
+  final record = <String, dynamic>{
+    'start': start.millisecondsSinceEpoch,
+    'end': end.millisecondsSinceEpoch,
+    'subject': planned.subject,
+    'appNames': planned.blockedAppNames,
+    'interruptions': <int>[],
+    'completed': false,
+  };
+  await prefs.setString('current_session_record', jsonEncode(record));
+  await prefs.setBool('session_in_progress', true);
+
+  final personalBest =
+      MotivationCoach.personalBestMinutes(loadSessionHistory(prefs));
+  final endTimeOfDay = TimeOfDay.fromDateTime(end);
+  await ConfigService.startSession(endTimeOfDay.hour, endTimeOfDay.minute);
+
+  rootNavigatorKey.currentState?.push(
+    MaterialPageRoute(
+      builder: (_) => SessionScreen(
+        endTime: end,
+        subject: planned.subject,
+        personalBestMinutes: personalBest,
+      ),
+    ),
+  );
+}
+
+/// Traite le tap d'une notification de séance planifiée (app déjà
+/// lancée, ou relancée à froid — voir [main]).
+void handleNotificationInfo(NotificationInfo info) {
+  final payload = info.payload;
+  if (payload == null || payload.isEmpty) {
+    return;
+  }
+  PlannedSession planned;
+  try {
+    planned =
+        PlannedSession.fromJson(Map<String, dynamic>.from(jsonDecode(payload)));
+  } catch (_) {
+    return;
+  }
+
+  if (info.actionId == NotificationService.startNowActionId) {
+    startPlannedSessionNow(planned);
+  } else {
+    rootNavigatorKey.currentState?.push(
+      MaterialPageRoute(builder: (_) => const PlanningScreen()),
+    );
+  }
 }
 
 class EduAyoFocusApp extends StatelessWidget {
@@ -32,6 +107,7 @@ class EduAyoFocusApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: rootNavigatorKey,
       title: 'EduAya Focus',
       theme: ThemeData(primarySwatch: Colors.indigo, useMaterial3: true),
       home: const HomeScreen(),
@@ -1516,6 +1592,8 @@ class _SessionScreenState extends State<SessionScreen>
 
 // ------------------- CALENDRIER -------------------
 
+enum _PlanningView { day, week, month }
+
 class PlanningScreen extends StatefulWidget {
   const PlanningScreen({super.key});
 
@@ -1524,14 +1602,17 @@ class PlanningScreen extends StatefulWidget {
 }
 
 class _PlanningScreenState extends State<PlanningScreen> {
-  DateTime _selectedDay = DateTime.now();
+  DateTime _selectedDay = _dateOnly(DateTime.now());
   List<PlannedSession> _sessions = [];
+  _PlanningView _view = _PlanningView.month;
 
   @override
   void initState() {
     super.initState();
     _load();
   }
+
+  static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
   Future<void> _load() async {
     final sessions = await PlanningService.load();
@@ -1540,38 +1621,129 @@ class _PlanningScreenState extends State<PlanningScreen> {
     });
   }
 
-  List<PlannedSession> get _sessionsForSelectedDay {
+  List<PlannedSession> _sessionsForDay(DateTime day) {
     final list = _sessions
         .where((s) =>
-            s.dateTime.year == _selectedDay.year &&
-            s.dateTime.month == _selectedDay.month &&
-            s.dateTime.day == _selectedDay.day)
+            s.dateTime.year == day.year &&
+            s.dateTime.month == day.month &&
+            s.dateTime.day == day.day)
         .toList();
     list.sort((a, b) => a.dateTime.compareTo(b.dateTime));
     return list;
   }
 
+  DateTime get _weekStart =>
+      _selectedDay.subtract(Duration(days: _selectedDay.weekday - 1));
+
   Future<void> _addSession() async {
-    final result = await showModalBottomSheet<PlannedSession>(
+    final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
-      builder: (_) => _AddPlannedSessionSheet(day: _selectedDay),
+      builder: (_) => _PlannedSessionFormSheet(initialDay: _selectedDay),
     );
-    if (result != null) {
-      await PlanningService.add(result);
+    if (result == true) {
       _load();
     }
   }
 
-  Future<void> _removeSession(PlannedSession session) async {
-    await PlanningService.remove(session.id);
+  Future<void> _editSession(PlannedSession session) async {
+    final result = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _PlannedSessionFormSheet(
+        initialDay: session.dateTime,
+        existing: session,
+      ),
+    );
+    if (result == true) {
+      _load();
+    }
+  }
+
+  Future<void> _postponeSession(PlannedSession session) async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: session.dateTime,
+      firstDate: DateTime.now().subtract(const Duration(days: 1)),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+    if (date == null || !mounted) {
+      return;
+    }
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(session.dateTime),
+    );
+    if (time == null) {
+      return;
+    }
+    await PlanningService.postpone(
+      session,
+      DateTime(date.year, date.month, date.day, time.hour, time.minute),
+    );
     _load();
+  }
+
+  Future<void> _duplicateSession(PlannedSession session) async {
+    await PlanningService.duplicate(session);
+    _load();
+  }
+
+  Future<void> _toggleCompleted(PlannedSession session) async {
+    await PlanningService.toggleCompleted(session);
+    _load();
+  }
+
+  Future<void> _deleteSession(PlannedSession session) async {
+    if (session.seriesId == null) {
+      await PlanningService.remove(session.id);
+      _load();
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text("Supprimer la séance"),
+        content: const Text(
+          "Cette séance fait partie d'une série récurrente. "
+          "Supprimer seulement celle-ci, ou toutes les prochaines "
+          "occurrences de la série ?",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, 'cancel'),
+            child: const Text("Annuler"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, 'one'),
+            child: const Text("Seulement celle-ci"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, 'series'),
+            child: const Text("Toute la série"),
+          ),
+        ],
+      ),
+    );
+    if (choice == 'one') {
+      await PlanningService.remove(session.id);
+    } else if (choice == 'series') {
+      await PlanningService.removeSeries(session.seriesId!);
+    } else {
+      return;
+    }
+    _load();
+  }
+
+  Future<void> _startNow(PlannedSession session) async {
+    await startPlannedSessionNow(session);
   }
 
   @override
   Widget build(BuildContext context) {
-    final daySessions = _sessionsForSelectedDay;
-
     return Scaffold(
       appBar: AppBar(title: const Text('Calendrier')),
       floatingActionButton: FloatingActionButton(
@@ -1579,70 +1751,316 @@ class _PlanningScreenState extends State<PlanningScreen> {
         tooltip: 'Planifier une séance',
         child: const Icon(Icons.add),
       ),
-      body: ListView(
+      body: Column(
         children: [
-          CalendarDatePicker(
-            initialDate: _selectedDay,
-            firstDate: DateTime.now().subtract(const Duration(days: 365)),
-            lastDate: DateTime.now().add(const Duration(days: 365)),
-            onDateChanged: (date) {
-              setState(() {
-                _selectedDay = date;
-              });
-            },
-          ),
-          const Divider(height: 1),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Text(
-              "Séances du "
-              "${_selectedDay.day.toString().padLeft(2, '0')}/"
-              "${_selectedDay.month.toString().padLeft(2, '0')}/"
-              "${_selectedDay.year}",
-              style: const TextStyle(fontWeight: FontWeight.bold),
+            padding: const EdgeInsets.all(12),
+            child: SegmentedButton<_PlanningView>(
+              segments: const [
+                ButtonSegment(value: _PlanningView.day, label: Text('Jour')),
+                ButtonSegment(
+                    value: _PlanningView.week, label: Text('Semaine')),
+                ButtonSegment(value: _PlanningView.month, label: Text('Mois')),
+              ],
+              selected: {_view},
+              onSelectionChanged: (selection) {
+                setState(() {
+                  _view = selection.first;
+                });
+              },
             ),
           ),
-          if (daySessions.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Text(
-                "Aucune séance planifiée ce jour-là.",
-                style: TextStyle(color: Colors.black54),
-              ),
-            )
-          else
-            for (final session in daySessions)
-              ListTile(
-                leading: const Icon(Icons.event_note),
-                title: Text(session.subject),
-                subtitle: Text(
-                  "${fmtTime(session.dateTime)} • ${session.durationMinutes} min",
-                ),
-                trailing: IconButton(
-                  icon: const Icon(Icons.delete_outline),
-                  onPressed: () => _removeSession(session),
-                ),
-              ),
-          const SizedBox(height: 24),
+          Expanded(child: _buildView()),
         ],
       ),
     );
   }
+
+  Widget _buildView() {
+    switch (_view) {
+      case _PlanningView.day:
+        return _buildDayView();
+      case _PlanningView.week:
+        return _buildWeekView();
+      case _PlanningView.month:
+        return _buildMonthView();
+    }
+  }
+
+  Widget _buildDayView() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.chevron_left),
+              onPressed: () => setState(() {
+                _selectedDay =
+                    _selectedDay.subtract(const Duration(days: 1));
+              }),
+            ),
+            Text(
+              _fmtFullDate(_selectedDay),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            IconButton(
+              icon: const Icon(Icons.chevron_right),
+              onPressed: () => setState(() {
+                _selectedDay = _selectedDay.add(const Duration(days: 1));
+              }),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ..._buildSessionTiles(_sessionsForDay(_selectedDay)),
+      ],
+    );
+  }
+
+  Widget _buildWeekView() {
+    final weekStart = _weekStart;
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.chevron_left),
+              onPressed: () => setState(() {
+                _selectedDay = _selectedDay.subtract(const Duration(days: 7));
+              }),
+            ),
+            Text(
+              "Semaine du ${_fmtShortDate(weekStart)}",
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            IconButton(
+              icon: const Icon(Icons.chevron_right),
+              onPressed: () => setState(() {
+                _selectedDay = _selectedDay.add(const Duration(days: 7));
+              }),
+            ),
+          ],
+        ),
+        for (var i = 0; i < 7; i++) ...[
+          const SizedBox(height: 12),
+          Text(
+            _fmtFullDate(weekStart.add(Duration(days: i))),
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Colors.indigo,
+            ),
+          ),
+          ..._buildSessionTiles(
+            _sessionsForDay(weekStart.add(Duration(days: i))),
+            emptyText: "Aucune séance",
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildMonthView() {
+    final daySessions = _sessionsForDay(_selectedDay);
+    return ListView(
+      children: [
+        CalendarDatePicker(
+          initialDate: _selectedDay,
+          firstDate: DateTime.now().subtract(const Duration(days: 365)),
+          lastDate: DateTime.now().add(const Duration(days: 365)),
+          onDateChanged: (date) {
+            setState(() {
+              _selectedDay = _dateOnly(date);
+            });
+          },
+        ),
+        const Divider(height: 1),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Text(
+            "Séances du ${_fmtShortDate(_selectedDay)}",
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+        ..._buildSessionTiles(daySessions),
+        const SizedBox(height: 24),
+      ],
+    );
+  }
+
+  List<Widget> _buildSessionTiles(
+    List<PlannedSession> sessions, {
+    String emptyText = "Aucune séance planifiée ce jour-là.",
+  }) {
+    if (sessions.isEmpty) {
+      return [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Text(emptyText, style: const TextStyle(color: Colors.black54)),
+        ),
+      ];
+    }
+    return [
+      for (final session in sessions) _buildSessionTile(session),
+    ];
+  }
+
+  Widget _buildSessionTile(PlannedSession session) {
+    final title = session.title?.isNotEmpty == true
+        ? session.title!
+        : session.subject;
+    final subtitleParts = <String>[
+      "${fmtTime(session.dateTime)} • ${session.durationMinutes} min",
+      if (session.title?.isNotEmpty == true) session.subject,
+      if (session.recurrence.isRecurring) session.recurrence.label,
+      if (session.blockedPackages.isNotEmpty)
+        "${session.blockedPackages.length} app(s) bloquée(s)",
+    ];
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      child: ListTile(
+        leading: IconButton(
+          icon: Icon(
+            session.completed
+                ? Icons.check_circle
+                : Icons.radio_button_unchecked,
+            color: session.completed ? Colors.green : null,
+          ),
+          onPressed: () => _toggleCompleted(session),
+        ),
+        title: Text(
+          title,
+          style: session.completed
+              ? const TextStyle(decoration: TextDecoration.lineThrough)
+              : null,
+        ),
+        subtitle: Text(subtitleParts.join(' • ')),
+        onTap: () => _editSession(session),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.play_circle_outline),
+              tooltip: "Démarrer maintenant",
+              onPressed: () => _startNow(session),
+            ),
+            PopupMenuButton<String>(
+              onSelected: (value) {
+                switch (value) {
+                  case 'edit':
+                    _editSession(session);
+                    break;
+                  case 'postpone':
+                    _postponeSession(session);
+                    break;
+                  case 'duplicate':
+                    _duplicateSession(session);
+                    break;
+                  case 'delete':
+                    _deleteSession(session);
+                    break;
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(value: 'edit', child: Text('Modifier')),
+                PopupMenuItem(value: 'postpone', child: Text('Reporter')),
+                PopupMenuItem(value: 'duplicate', child: Text('Dupliquer')),
+                PopupMenuItem(value: 'delete', child: Text('Supprimer')),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _fmtShortDate(DateTime d) {
+    return "${d.day.toString().padLeft(2, '0')}/"
+        "${d.month.toString().padLeft(2, '0')}/${d.year}";
+  }
+
+  String _fmtFullDate(DateTime d) {
+    const weekdays = [
+      'Lundi',
+      'Mardi',
+      'Mercredi',
+      'Jeudi',
+      'Vendredi',
+      'Samedi',
+      'Dimanche',
+    ];
+    return "${weekdays[d.weekday - 1]} ${_fmtShortDate(d)}";
+  }
 }
 
-class _AddPlannedSessionSheet extends StatefulWidget {
-  final DateTime day;
-  const _AddPlannedSessionSheet({required this.day});
+// ------------------- FORMULAIRE DE SEANCE PLANIFIEE -------------------
+
+class _PlannedSessionFormSheet extends StatefulWidget {
+  final DateTime initialDay;
+  final PlannedSession? existing;
+  const _PlannedSessionFormSheet({required this.initialDay, this.existing});
 
   @override
-  State<_AddPlannedSessionSheet> createState() =>
-      _AddPlannedSessionSheetState();
+  State<_PlannedSessionFormSheet> createState() =>
+      _PlannedSessionFormSheetState();
 }
 
-class _AddPlannedSessionSheetState extends State<_AddPlannedSessionSheet> {
-  String _subject = subjectsList.first;
-  TimeOfDay _time = TimeOfDay.now();
-  int _durationMinutes = 50;
+class _PlannedSessionFormSheetState extends State<_PlannedSessionFormSheet> {
+  late String _subject;
+  late TextEditingController _titleController;
+  late DateTime _date;
+  late TimeOfDay _time;
+  late int _durationMinutes;
+  late Set<String> _blockedPackages;
+  late List<String> _blockedAppNames;
+  late RecurrenceType _recurrenceType;
+  late Set<int> _customWeekdays;
+  bool _saving = false;
+
+  bool get _isEditing => widget.existing != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    _subject = existing?.subject ?? subjectsList.first;
+    _titleController = TextEditingController(text: existing?.title ?? '');
+    final day = existing?.dateTime ?? widget.initialDay;
+    _date = DateTime(day.year, day.month, day.day);
+    _time = TimeOfDay.fromDateTime(existing?.dateTime ?? widget.initialDay);
+    _durationMinutes =
+        existing?.durationMinutes ?? recommendedDurationFor(_subject).focusMinutes;
+    _blockedPackages = Set<String>.from(existing?.blockedPackages ?? const {});
+    _blockedAppNames = List<String>.from(existing?.blockedAppNames ?? const []);
+    _recurrenceType = existing?.recurrence.type ?? RecurrenceType.none;
+    _customWeekdays = Set<int>.from(
+      existing?.recurrence.customWeekdays ?? const {},
+    );
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime.now().subtract(const Duration(days: 1)),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+    if (picked != null) {
+      setState(() {
+        _date = DateTime(picked.year, picked.month, picked.day);
+      });
+    }
+  }
 
   Future<void> _pickTime() async {
     final picked = await showTimePicker(context: context, initialTime: _time);
@@ -1653,23 +2071,70 @@ class _AddPlannedSessionSheetState extends State<_AddPlannedSessionSheet> {
     }
   }
 
-  void _confirm() {
+  Future<void> _pickApps() async {
+    final result = await Navigator.push<_BlockedAppsSelection>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _BlockedAppsPickerScreen(
+          initialSelected: _blockedPackages,
+        ),
+      ),
+    );
+    if (result != null) {
+      setState(() {
+        _blockedPackages = result.packages;
+        _blockedAppNames = result.names;
+      });
+    }
+  }
+
+  Future<void> _save() async {
+    setState(() {
+      _saving = true;
+    });
+
     final dateTime = DateTime(
-      widget.day.year,
-      widget.day.month,
-      widget.day.day,
+      _date.year,
+      _date.month,
+      _date.day,
       _time.hour,
       _time.minute,
     );
-    Navigator.pop(
-      context,
-      PlannedSession(
-        id: DateTime.now().microsecondsSinceEpoch.toString(),
+    final title = _titleController.text.trim();
+    final recurrence = RecurrenceRule(
+      type: _recurrenceType,
+      customWeekdays: _customWeekdays,
+    );
+
+    if (_isEditing) {
+      final updated = widget.existing!.copyWith(
         subject: _subject,
+        title: title.isEmpty ? null : title,
+        clearTitle: title.isEmpty,
         dateTime: dateTime,
         durationMinutes: _durationMinutes,
-      ),
-    );
+        blockedPackages: _blockedPackages,
+        blockedAppNames: _blockedAppNames,
+      );
+      await PlanningService.update(updated);
+    } else {
+      final session = PlannedSession(
+        id: '${DateTime.now().microsecondsSinceEpoch}',
+        subject: _subject,
+        title: title.isEmpty ? null : title,
+        dateTime: dateTime,
+        durationMinutes: _durationMinutes,
+        blockedPackages: _blockedPackages,
+        blockedAppNames: _blockedAppNames,
+        recurrence: recurrence,
+      );
+      await PlanningService.add(session);
+    }
+
+    if (!mounted) {
+      return;
+    }
+    Navigator.pop(context, true);
   }
 
   @override
@@ -1681,59 +2146,220 @@ class _AddPlannedSessionSheetState extends State<_AddPlannedSessionSheet> {
         top: 20,
         bottom: MediaQuery.of(context).viewInsets.bottom + 20,
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            "Planifier une séance",
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-          ),
-          const SizedBox(height: 16),
-          DropdownButtonFormField<String>(
-            value: _subject,
-            decoration: const InputDecoration(labelText: "Matière"),
-            items: [
-              for (final s in subjectsList)
-                DropdownMenuItem(value: s, child: Text(s)),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _isEditing ? "Modifier la séance" : "Planifier une séance",
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _titleController,
+              decoration: const InputDecoration(
+                labelText: "Titre (facultatif)",
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _subject,
+              decoration: const InputDecoration(labelText: "Matière"),
+              items: [
+                for (final s in subjectsList)
+                  DropdownMenuItem(value: s, child: Text(s)),
+              ],
+              onChanged: (value) {
+                setState(() {
+                  _subject = value ?? _subject;
+                });
+              },
+            ),
+            const SizedBox(height: 8),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text("Date"),
+              trailing: Text(
+                "${_date.day.toString().padLeft(2, '0')}/"
+                "${_date.month.toString().padLeft(2, '0')}/${_date.year}",
+              ),
+              onTap: _pickDate,
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text("Heure"),
+              trailing: Text(_time.format(context)),
+              onTap: _pickTime,
+            ),
+            const SizedBox(height: 8),
+            Text("Durée : $_durationMinutes min"),
+            Slider(
+              value: _durationMinutes.toDouble(),
+              min: 15,
+              max: 180,
+              divisions: 33,
+              label: "$_durationMinutes min",
+              onChanged: (value) {
+                setState(() {
+                  _durationMinutes = value.round();
+                });
+              },
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text("Applications à bloquer"),
+              subtitle: Text(
+                _blockedPackages.isEmpty
+                    ? "Aucune"
+                    : _blockedAppNames.join(', '),
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: _pickApps,
+            ),
+            if (!_isEditing) ...[
+              const SizedBox(height: 8),
+              DropdownButtonFormField<RecurrenceType>(
+                value: _recurrenceType,
+                decoration: const InputDecoration(labelText: "Répétition"),
+                items: [
+                  for (final t in RecurrenceType.values)
+                    DropdownMenuItem(
+                      value: t,
+                      child: Text(RecurrenceRule(type: t).label),
+                    ),
+                ],
+                onChanged: (value) {
+                  setState(() {
+                    _recurrenceType = value ?? RecurrenceType.none;
+                  });
+                },
+              ),
+              if (_recurrenceType == RecurrenceType.custom) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    for (var day = 1; day <= 7; day++)
+                      FilterChip(
+                        label: Text(_weekdayShortLabel(day)),
+                        selected: _customWeekdays.contains(day),
+                        onSelected: (selected) {
+                          setState(() {
+                            if (selected) {
+                              _customWeekdays.add(day);
+                            } else {
+                              _customWeekdays.remove(day);
+                            }
+                          });
+                        },
+                      ),
+                  ],
+                ),
+              ],
             ],
-            onChanged: (value) {
-              setState(() {
-                _subject = value ?? _subject;
-              });
-            },
-          ),
-          const SizedBox(height: 12),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text("Heure"),
-            trailing: Text(_time.format(context)),
-            onTap: _pickTime,
-          ),
-          const SizedBox(height: 12),
-          Text("Durée : $_durationMinutes min"),
-          Slider(
-            value: _durationMinutes.toDouble(),
-            min: 15,
-            max: 180,
-            divisions: 33,
-            label: "$_durationMinutes min",
-            onChanged: (value) {
-              setState(() {
-                _durationMinutes = value.round();
-              });
-            },
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _confirm,
-              child: const Text("Planifier"),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _saving ? null : _save,
+                child: Text(_isEditing ? "Enregistrer" : "Planifier"),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _weekdayShortLabel(int weekday) {
+    const labels = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+    return labels[weekday - 1];
+  }
+}
+
+class _BlockedAppsSelection {
+  const _BlockedAppsSelection(this.packages, this.names);
+  final Set<String> packages;
+  final List<String> names;
+}
+
+class _BlockedAppsPickerScreen extends StatefulWidget {
+  final Set<String> initialSelected;
+  const _BlockedAppsPickerScreen({required this.initialSelected});
+
+  @override
+  State<_BlockedAppsPickerScreen> createState() =>
+      _BlockedAppsPickerScreenState();
+}
+
+class _BlockedAppsPickerScreenState extends State<_BlockedAppsPickerScreen> {
+  List<Map<String, String>> _apps = [];
+  late Set<String> _selected;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = Set<String>.from(widget.initialSelected);
+    _loadApps();
+  }
+
+  Future<void> _loadApps() async {
+    final apps = await ConfigService.getInstalledApps();
+    setState(() {
+      _apps = apps;
+      _loading = false;
+    });
+  }
+
+  void _confirm() {
+    final names = <String>[];
+    for (final app in _apps) {
+      if (_selected.contains(app['packageName'])) {
+        names.add(app['name'] ?? '');
+      }
+    }
+    Navigator.pop(context, _BlockedAppsSelection(_selected, names));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("Applications à bloquer"),
+        actions: [
+          TextButton(
+            onPressed: _confirm,
+            child: const Text(
+              "OK",
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
             ),
           ),
         ],
       ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView.builder(
+              itemCount: _apps.length,
+              itemBuilder: (context, index) {
+                final app = _apps[index];
+                final pkg = app['packageName']!;
+                return CheckboxListTile(
+                  title: Text(app['name'] ?? pkg),
+                  value: _selected.contains(pkg),
+                  onChanged: (checked) {
+                    setState(() {
+                      if (checked == true) {
+                        _selected.add(pkg);
+                      } else {
+                        _selected.remove(pkg);
+                      }
+                    });
+                  },
+                );
+              },
+            ),
     );
   }
 }
