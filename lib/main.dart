@@ -1675,11 +1675,9 @@ class _WeeklyReportScreenState extends State<WeeklyReportScreen> {
       final file = File('${tempDir.path}/rapport_hebdo_eduaya_focus.png');
       await file.writeAsBytes(pngBytes);
 
-      await SharePlus.instance.share(
-        ShareParams(
-          files: [XFile(file.path)],
-          text: 'Mon rapport hebdomadaire EduAya Focus',
-        ),
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: 'Mon rapport hebdomadaire EduAya Focus',
       );
     } finally {
       if (mounted) {
