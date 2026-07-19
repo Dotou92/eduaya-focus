@@ -1,6 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'data/ambient_sounds.dart';
 import 'data/subjects.dart';
@@ -14,6 +19,7 @@ import 'services/planned_session.dart';
 import 'services/planning_service.dart';
 import 'services/session_summary.dart';
 import 'services/sound_service.dart';
+import 'services/weekly_report.dart';
 
 void main() {
   runApp(const EduAyoFocusApp());
@@ -273,6 +279,16 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.flag_outlined),
             tooltip: "Mes objectifs",
             onPressed: _openGoalsScreen,
+          ),
+          IconButton(
+            icon: const Icon(Icons.summarize_outlined),
+            tooltip: "Rapport hebdomadaire",
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const WeeklyReportScreen()),
+              );
+            },
           ),
         ],
       ),
@@ -1612,5 +1628,194 @@ class _AddPlannedSessionSheetState extends State<_AddPlannedSessionSheet> {
         ],
       ),
     );
+  }
+}
+
+// ------------------- RAPPORT HEBDOMADAIRE -------------------
+
+class WeeklyReportScreen extends StatefulWidget {
+  const WeeklyReportScreen({super.key});
+
+  @override
+  State<WeeklyReportScreen> createState() => _WeeklyReportScreenState();
+}
+
+class _WeeklyReportScreenState extends State<WeeklyReportScreen> {
+  final GlobalKey _reportKey = GlobalKey();
+  WeeklyReport? _report;
+  bool _sharing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final records = loadSessionHistory(prefs);
+    setState(() {
+      _report = WeeklyReport.compute(records);
+    });
+  }
+
+  Future<void> _share() async {
+    setState(() {
+      _sharing = true;
+    });
+    try {
+      final boundary = _reportKey.currentContext!.findRenderObject()
+          as RenderRepaintBoundary;
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData =
+          await image.toByteData(format: ui.ImageByteFormat.png);
+      final pngBytes = byteData!.buffer.asUint8List();
+
+      final tempDir = await getTemporaryDirectory();
+      final file = File('${tempDir.path}/rapport_hebdo_eduaya_focus.png');
+      await file.writeAsBytes(pngBytes);
+
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(file.path)],
+          text: 'Mon rapport hebdomadaire EduAya Focus',
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sharing = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final report = _report;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text("Rapport hebdomadaire")),
+      body: report == null
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.all(20),
+              children: [
+                RepaintBoundary(
+                  key: _reportKey,
+                  child: Container(
+                    color: Colors.white,
+                    padding: const EdgeInsets.all(20),
+                    child: _buildReportContent(report),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.share),
+                    label: Text(_sharing ? "Préparation..." : "Partager"),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
+                    onPressed: _sharing ? null : _share,
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+
+  Widget _buildReportContent(WeeklyReport report) {
+    final subjects = report.subjectMinutes.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          "EduAya Focus",
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 20,
+            color: Colors.indigo,
+          ),
+        ),
+        Text(
+          "Rapport du ${_fmtDate(report.weekStart)} au "
+          "${_fmtDate(report.weekEnd)}",
+          style: const TextStyle(color: Colors.black54, fontSize: 13),
+        ),
+        const SizedBox(height: 20),
+        _reportStat(
+          "Temps d'étude total",
+          "${report.totalHours.toStringAsFixed(1)} h",
+        ),
+        _reportStat(
+          "Taux de concentration",
+          "${report.concentrationRatePercent.round()} %",
+        ),
+        _reportStat(
+          "Distractions interceptées",
+          "${report.distractionsIntercepted}",
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          "Répartition par matière",
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        if (subjects.isEmpty)
+          const Text(
+            "Aucune session cette semaine.",
+            style: TextStyle(color: Colors.black54),
+          )
+        else
+          for (final entry in subjects)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                "• ${entry.key} : ${(entry.value / 60).toStringAsFixed(1)} h",
+              ),
+            ),
+        if (report.mostBlockedApps.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          const Text(
+            "Applications les plus bloquées",
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          for (final entry in report.mostBlockedApps)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                "• ${entry.key} (${entry.value} session"
+                "${entry.value > 1 ? 's' : ''})",
+              ),
+            ),
+        ],
+      ],
+    );
+  }
+
+  Widget _reportStat(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.black54)),
+          Text(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _fmtDate(DateTime d) {
+    return "${d.day.toString().padLeft(2, '0')}/"
+        "${d.month.toString().padLeft(2, '0')}";
   }
 }
