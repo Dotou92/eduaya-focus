@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'data/subjects.dart';
+import 'services/badges.dart';
 import 'services/config_service.dart';
+import 'services/focus_score.dart';
 import 'services/session_summary.dart';
 
 void main() {
@@ -168,6 +170,8 @@ class _HomeScreenState extends State<HomeScreen> {
       style: TextStyle(color: Colors.black54),
     ));
     children.add(const SizedBox(height: 16));
+    children.add(_buildFocusScoreCard());
+    children.add(const SizedBox(height: 12));
     children.add(_buildSummaryCard());
     children.add(const SizedBox(height: 24));
 
@@ -219,6 +223,69 @@ class _HomeScreenState extends State<HomeScreen> {
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: children,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFocusScoreCard() {
+    final records = _history
+        .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e))
+        .toList();
+    final score = FocusScore.compute(records);
+    final stats = SessionStats.fromRecords(records);
+    final badges = BadgeEvaluator.evaluate(
+      weeklyScore: score,
+      totalCompletedSessions: stats.completedSessions,
+    );
+
+    return Card(
+      color: Colors.deepPurple[50],
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    "Indice Focus (7 derniers jours)",
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+                Text(
+                  "${score.overall.round()}/100",
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                    color: Colors.deepPurple,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              "Concentration ${score.concentration.round()}% • "
+              "Régularité ${score.regularity.round()}% • "
+              "Persévérance ${score.perseverance.round()}%",
+              style: const TextStyle(color: Colors.black54, fontSize: 12),
+            ),
+            if (badges.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: badges
+                    .map((b) => Chip(
+                          avatar: const Icon(Icons.emoji_events, size: 18),
+                          label: Text(b.label),
+                          backgroundColor: Colors.amber[100],
+                        ))
+                    .toList(),
+              ),
+            ],
+          ],
         ),
       ),
     );
