@@ -96,4 +96,21 @@ class FocusScore {
     final completed = weekRecords.where((r) => r['completed'] == true).length;
     return (completed / weekRecords.length) * 100;
   }
+
+  /// Scores des [weeks] dernières semaines, la plus récente en premier
+  /// (semaine glissante de 7 jours se terminant aujourd'hui, puis
+  /// il y a 7 jours, puis 14 jours, etc). Utilisé pour les badges qui
+  /// exigent une performance soutenue sur plusieurs semaines.
+  static List<FocusScore> weeklyHistory(
+    List<Map<String, dynamic>> records, {
+    int weeks = 4,
+    DateTime? now,
+  }) {
+    final today = now ?? DateTime.now();
+    final todayDate = DateTime(today.year, today.month, today.day);
+    return List.generate(weeks, (i) {
+      final anchor = todayDate.subtract(Duration(days: 7 * i));
+      return FocusScore.compute(records, now: anchor);
+    });
+  }
 }

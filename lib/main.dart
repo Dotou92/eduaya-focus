@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'data/subjects.dart';
 import 'services/badges.dart';
+import 'services/challenges.dart';
 import 'services/config_service.dart';
 import 'services/focus_score.dart';
 import 'services/session_summary.dart';
@@ -172,6 +173,8 @@ class _HomeScreenState extends State<HomeScreen> {
     children.add(const SizedBox(height: 16));
     children.add(_buildFocusScoreCard());
     children.add(const SizedBox(height: 12));
+    children.add(_buildChallengesCard());
+    children.add(const SizedBox(height: 12));
     children.add(_buildSummaryCard());
     children.add(const SizedBox(height: 24));
 
@@ -236,6 +239,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final stats = SessionStats.fromRecords(records);
     final badges = BadgeEvaluator.evaluate(
       weeklyScore: score,
+      recentWeeklyScores: FocusScore.weeklyHistory(records),
       totalCompletedSessions: stats.completedSessions,
     );
 
@@ -284,6 +288,66 @@ class _HomeScreenState extends State<HomeScreen> {
                         ))
                     .toList(),
               ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildChallengesCard() {
+    final records = _history
+        .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e))
+        .toList();
+    final challenges = ChallengeEvaluator.evaluate(records);
+
+    return Card(
+      color: Colors.teal[50],
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              "Défis en cours",
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            for (final challenge in challenges) ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      challenge.label,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                  Text(
+                    "${challenge.progress.toStringAsFixed(challenge.unit == 'h' ? 1 : 0)}"
+                    "/${challenge.target.toStringAsFixed(0)} ${challenge.unit}",
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: challenge.isCompleted
+                          ? Colors.teal
+                          : Colors.black54,
+                      fontWeight: challenge.isCompleted
+                          ? FontWeight.bold
+                          : FontWeight.normal,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: challenge.progressRatio,
+                  minHeight: 6,
+                  backgroundColor: Colors.teal[100],
+                  color: challenge.isCompleted ? Colors.teal : Colors.teal[300],
+                ),
+              ),
+              const SizedBox(height: 10),
             ],
           ],
         ),

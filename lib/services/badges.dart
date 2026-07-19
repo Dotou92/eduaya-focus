@@ -1,10 +1,6 @@
 import 'focus_score.dart';
 
-/// Un badge débloqué (§7 du cahier des charges). Seuls les badges dont
-/// le seuil est déductible des critères déjà définis (Indice Focus,
-/// nombre de séances) sont implémentés pour l'instant ; "Légende Focus"
-/// et "Maître de la Discipline" nécessitent des seuils à définir avec
-/// le porteur de projet avant d'être ajoutés.
+/// Un badge débloqué (§7 du cahier des charges).
 class FocusBadge {
   const FocusBadge(this.id, this.label);
 
@@ -13,8 +9,14 @@ class FocusBadge {
 }
 
 class BadgeEvaluator {
+  /// Nombre de semaines consécutives à Indice Focus ≥ 90 requis pour
+  /// débloquer "Maître de la Discipline".
+  static const int masterWeeksRequired = 4;
+  static const double masterWeeklyThreshold = 90;
+
   static List<FocusBadge> evaluate({
     required FocusScore weeklyScore,
+    required List<FocusScore> recentWeeklyScores,
     required int totalCompletedSessions,
   }) {
     final badges = <FocusBadge>[];
@@ -27,10 +29,22 @@ class BadgeEvaluator {
       badges.add(const FocusBadge('concentre_bronze', 'Concentré Bronze'));
     }
 
+    if (recentWeeklyScores.length >= masterWeeksRequired &&
+        recentWeeklyScores
+            .take(masterWeeksRequired)
+            .every((w) => w.overall >= masterWeeklyThreshold)) {
+      badges.add(
+        const FocusBadge('maitre_discipline', 'Maître de la Discipline'),
+      );
+    }
+
     if (totalCompletedSessions >= 100) {
       badges.add(
         const FocusBadge('serie_100_seances', 'Série de 100 séances'),
       );
+    }
+    if (totalCompletedSessions >= 200) {
+      badges.add(const FocusBadge('legende_focus', 'Légende Focus'));
     }
 
     return badges;
