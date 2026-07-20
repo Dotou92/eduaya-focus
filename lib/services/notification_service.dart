@@ -67,6 +67,23 @@ class NotificationService {
     _initialized = true;
   }
 
+  /// À vérifier avant de compter sur un rappel : si l'utilisateur a
+  /// refusé la permission (ou si l'OS l'a redemandée puis rejetée), les
+  /// notifications programmées ne s'affichent jamais, sans aucune
+  /// erreur côté code — la seule façon de le savoir est de vérifier ce
+  /// statut explicitement.
+  static Future<bool> hasPermission() async {
+    await init();
+    return await Permission.notification.isGranted;
+  }
+
+  /// Redemande la permission si elle n'a pas encore été refusée
+  /// définitivement. Retourne true si accordée après la demande.
+  static Future<bool> requestPermission() async {
+    final status = await Permission.notification.request();
+    return status.isGranted;
+  }
+
   /// Renseigné si l'app a été lancée en tapant une notification
   /// (app totalement fermée avant le tap).
   static Future<NotificationInfo?> getLaunchDetails() async {

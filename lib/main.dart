@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'data/ambient_sounds.dart';
@@ -1605,11 +1606,13 @@ class _PlanningScreenState extends State<PlanningScreen> {
   DateTime _selectedDay = _dateOnly(DateTime.now());
   List<PlannedSession> _sessions = [];
   _PlanningView _view = _PlanningView.month;
+  bool _notificationsEnabled = true;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _checkNotificationPermission();
   }
 
   static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
@@ -1619,6 +1622,33 @@ class _PlanningScreenState extends State<PlanningScreen> {
     setState(() {
       _sessions = sessions;
     });
+  }
+
+  Future<void> _checkNotificationPermission() async {
+    final granted = await NotificationService.hasPermission();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _notificationsEnabled = granted;
+    });
+  }
+
+  Future<void> _fixNotificationPermission() async {
+    final granted = await NotificationService.requestPermission();
+    if (!mounted) {
+      return;
+    }
+    if (granted) {
+      setState(() {
+        _notificationsEnabled = true;
+      });
+      return;
+    }
+    // Refusée définitivement : la redemander ne fait plus rien, il
+    // faut passer par les réglages système de l'app.
+    await openAppSettings();
+    _checkNotificationPermission();
   }
 
   List<PlannedSession> _sessionsForDay(DateTime day) {
@@ -1753,6 +1783,29 @@ class _PlanningScreenState extends State<PlanningScreen> {
       ),
       body: Column(
         children: [
+          if (!_notificationsEnabled)
+            Container(
+              width: double.infinity,
+              color: Colors.red[50],
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  const Icon(Icons.notifications_off, color: Colors.red),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text(
+                      "Les notifications sont désactivées : tu ne recevras "
+                      "aucun rappel pour tes séances planifiées.",
+                      style: TextStyle(fontSize: 13),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _fixNotificationPermission,
+                    child: const Text("Activer"),
+                  ),
+                ],
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.all(12),
             child: SegmentedButton<_PlanningView>(
